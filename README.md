@@ -59,27 +59,27 @@ flowchart LR
 
 ## Repository Layout
 
-| Path | Purpose |
-| --- | --- |
-| `strip_monitor.py` | Main one-microphone runtime process. |
-| `audio_analysis_background.py` | Headless single-stream launcher wrapper. |
-| `config.yaml` | Default single-microphone configuration. |
-| `config_mic1.example.yaml`, `config_mic2.example.yaml` | Templates for two-microphone Pi deployments. |
-| `download_models.py` | Optional one-time model-cache warmup script. |
-| `setup_pi.sh` | Installs system packages, creates `venv/`, installs Python dependencies. |
-| `start_audio_server.sh` | Starts one `strip_monitor.py` process from the local venv. |
-| `start_two_mics.sh`, `stop_two_mics.sh` | Starts/stops two microphone processes on one Pi. |
-| `diag_audio.py` | Captures a short diagnostic sample and checks resampling plus VAD. |
-| `osc_collector.py` | Central OSC collector that writes CSV files. |
-| `broadcast_ctrl.py` | Sends one control command to multiple discovered devices. |
-| `gather_logs.sh` | Copies Pi-side `output/` folders back to the central computer. |
-| `receiver/` | Node.js OSC-to-WebSocket bridge and browser UI. |
-| `src/` | Audio, VAD, prosody, emotion, MIDI, and CSV helper modules. |
-| `models/` | Optional project-local emotion2vec model cache. |
+| Path                                                   | Purpose                                                                  |
+| ------------------------------------------------------ | ------------------------------------------------------------------------ |
+| `strip_monitor.py`                                     | Main one-microphone runtime process.                                     |
+| `audio_analysis_background.py`                         | Headless single-stream launcher wrapper.                                 |
+| `config.yaml`                                          | Default single-microphone configuration.                                 |
+| `config_mic1.example.yaml`, `config_mic2.example.yaml` | Templates for two-microphone Pi deployments.                             |
+| `download_models.py`                                   | Optional one-time model-cache warmup script.                             |
+| `setup_pi.sh`                                          | Installs system packages, creates `venv/`, installs Python dependencies. |
+| `start_audio_server.sh`                                | Starts one `strip_monitor.py` process from the local venv.               |
+| `start_two_mics.sh`, `stop_two_mics.sh`                | Starts/stops two microphone processes on one Pi.                         |
+| `diag_audio.py`                                        | Captures a short diagnostic sample and checks resampling plus VAD.       |
+| `osc_collector.py`                                     | Central OSC collector that writes CSV files.                             |
+| `broadcast_ctrl.py`                                    | Sends one control command to multiple discovered devices.                |
+| `gather_logs.sh`                                       | Copies Pi-side `output/` folders back to the central computer.           |
+| `receiver/`                                            | Node.js OSC-to-WebSocket bridge and browser UI.                          |
+| `src/`                                                 | Audio, VAD, prosody, emotion, MIDI, and CSV helper modules.              |
+| `models/`                                              | Optional project-local emotion2vec model cache.                          |
 
 ## Raspberry Pi Setup
 
-Use Raspberry Pi OS 64-bit on a Pi 4 or Pi 5. A Pi 5 or a Pi 4 with at least 4 GB RAM is recommended when loading the emotion model.
+Use Raspberry Pi OS 64-bit on a Pi 4 or Pi 5. Use at least 8 GB RAM when loading the emotion model.
 
 Required Pi-side system packages are installed by `setup_pi.sh`:
 
@@ -160,36 +160,36 @@ Concrete example for a Pi with ID `5`, two USB microphones, and the central rece
 # config_mic1.yaml
 pi_id: 5
 mic_id: 1
-audio_device: "HK-MIC1"
+audio_device: 'HK-MIC1'
 ctrl_port: 9001
-osc_ip: "192.168.1.20"
+osc_ip: '192.168.1.20'
 osc_port: 9000
-emotion_model: "seed"
+emotion_model: 'seed'
 emotion_load: true
 vad_active: false
 prosody_active: false
 emotion_active: false
 osc_active: false
 log_active: false
-output_dir: "output"
+output_dir: 'output'
 ```
 
 ```yaml
 # config_mic2.yaml
 pi_id: 5
 mic_id: 2
-audio_device: "HK-MIC2"
+audio_device: 'HK-MIC2'
 ctrl_port: 9002
-osc_ip: "192.168.1.20"
+osc_ip: '192.168.1.20'
 osc_port: 9000
-emotion_model: "seed"
+emotion_model: 'seed'
 emotion_load: true
 vad_active: false
 prosody_active: false
 emotion_active: false
 osc_active: false
 log_active: false
-output_dir: "output"
+output_dir: 'output'
 ```
 
 The `osc_ip` value is the IP address of the central computer running `run_web.sh` or `osc_collector.py`. If you only want to test locally on the Pi, keep `osc_ip: "127.0.0.1"`.
@@ -278,15 +278,15 @@ Each `strip_monitor.py` instance listens for OSC control messages on its configu
 
 Common controls:
 
-| Address | Arguments | Effect |
-| --- | --- | --- |
-| `/ctrl/osc_start` | none | Start OSC telemetry. |
-| `/ctrl/osc_stop` | none | Stop OSC telemetry. |
-| `/ctrl/log_start` | optional run id / timestamp | Start local CSV logging. |
-| `/ctrl/log_stop` | none | Stop local CSV logging. |
-| `/ctrl/vad_on`, `/ctrl/vad_off` | none | Toggle VAD. |
-| `/ctrl/prosody_on`, `/ctrl/prosody_off` | none | Toggle prosody extraction. |
-| `/ctrl/emotion_on`, `/ctrl/emotion_off` | none | Toggle emotion inference if the model was loaded at startup. |
+| Address                                 | Arguments                   | Effect                                                       |
+| --------------------------------------- | --------------------------- | ------------------------------------------------------------ |
+| `/ctrl/osc_start`                       | none                        | Start OSC telemetry.                                         |
+| `/ctrl/osc_stop`                        | none                        | Stop OSC telemetry.                                          |
+| `/ctrl/log_start`                       | optional run id / timestamp | Start local CSV logging.                                     |
+| `/ctrl/log_stop`                        | none                        | Stop local CSV logging.                                      |
+| `/ctrl/vad_on`, `/ctrl/vad_off`         | none                        | Toggle VAD.                                                  |
+| `/ctrl/prosody_on`, `/ctrl/prosody_off` | none                        | Toggle prosody extraction.                                   |
+| `/ctrl/emotion_on`, `/ctrl/emotion_off` | none                        | Toggle emotion inference if the model was loaded at startup. |
 
 `broadcast_ctrl.py` can fan out the same command to multiple discovered devices.
 
@@ -302,10 +302,10 @@ This means the model is not downloaded on every run. The first run that needs a 
 
 Supported variants:
 
-| Config value | ModelScope ID | Notes |
-| --- | --- | --- |
-| `base` | `iic/emotion2vec_plus_base` | Larger model, better default quality. |
-| `seed` | `iic/emotion2vec_plus_seed` | Smaller model for lower-memory deployments. |
+| Config value | ModelScope ID               | Notes                                       |
+| ------------ | --------------------------- | ------------------------------------------- |
+| `base`       | `iic/emotion2vec_plus_base` | Larger model, better default quality.       |
+| `seed`       | `iic/emotion2vec_plus_seed` | Smaller model for lower-memory deployments. |
 
 For low-memory Pis, set this in the YAML before launch:
 

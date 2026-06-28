@@ -1,0 +1,39 @@
+# Pi-headless streamer dependencies.
+# Differs from project root requirements.txt:
+#   - no matplotlib (display always off on Pi)
+#   - explicit PyYAML (strip_monitor uses `import yaml`)
+#
+# NOTE on torch bloat: the default PyPI torch wheel pulls in ~2 GB of
+# nvidia-cuda-* libraries that are useless on a Pi (no NVIDIA GPU).
+# They install harmlessly and are never loaded at runtime. Attempted
+# fix via PyTorch's CPU-only wheel index was reverted as too risky for
+# Python 3.13 / aarch64 (spotty wheel coverage, funasr version pinning).
+# If you want to revisit, see git history for the patch.
+
+# Core
+numpy
+sounddevice        # needs portaudio19-dev installed via apt
+PyYAML
+
+# emotion2vec via FunASR
+funasr
+torch
+torchaudio
+modelscope         # model hub used by funasr
+
+# Voice Activity Detection
+# (Silero VAD loaded via torch.hub — no extra pip package needed)
+
+# Prosody features (openSMILE — full-buffer LLD extraction)
+opensmile
+
+# OSC streaming
+python-osc
+
+# MIDI export (used by src/midi_writer.py — keep for parity, lightweight)
+mido
+
+# Self-telemetry (RSS / CPU% per process) — used by _self_stats_thread.
+# Tiny dep; lets the Mac see how much pressure each strip_monitor
+# instance puts on the Pi, which matters when running 2 mics per Pi.
+psutil

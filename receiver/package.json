@@ -1,0 +1,13 @@
+{
+  "name": "speech-emotion-receiver",
+  "version": "1.0.0",
+  "description": "OSC → WebSocket bridge + p5.js receiver for real-time speech analysis",
+  "main": "bridge.js",
+  "scripts": {
+    "start": "node bridge.js"
+  },
+  "dependencies": {
+    "osc": "^2.4.5",
+    "ws": "^8.16.0"
+  }
+}

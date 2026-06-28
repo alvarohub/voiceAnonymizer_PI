@@ -1,0 +1,30 @@
+# Python venv
+venv/
+.venv/
+
+# Local per-Pi microphone configs
+config_mic1.yaml
+config_mic2.yaml
+
+# Project-local model cache (~1 GB+ per model — ship via USB, not git)
+# Track the folder via its README.md, but ignore everything else.
+models/*
+!models/README.md
+
+# Modelscope cache (if symlinked or copied here)
+.cache/
+
+# Runtime output
+output/
+logs/
+*.csv
+
+# Node dependencies for the central receiver
+receiver/node_modules/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# OS junk
+.DS_Store

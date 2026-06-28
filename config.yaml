@@ -1,0 +1,84 @@
+# ───────────────────────────────────────────────────
+# strip_monitor configuration (default / single-mic fallback)
+# For two-mic-per-Pi setups, use config_mic1.yaml and config_mic2.yaml.
+# ──────────────────────────────────────────────────
+
+# Device identity — used to namespace ALL outgoing OSC under /dev/<id>/...
+# device_id is derived as f"{pi_id}-{mic_id}".
+# Leave pi_id null to fall back to the Pi's hostname.
+pi_id: null # e.g. 5
+mic_id: 1 # 1 or 2 (per microphone on this Pi)
+
+# Audio
+sample_rate: 16000
+
+# Input device. null = system default. Can be:
+#   - integer index (e.g. 0, 1, 3) — see startup log or run: python strip_monitor.py --list-devices
+#   - substring of device name (e.g. 'HK-MIC1', 'MacBook Pro Microphone')
+# Override at runtime with --device <idx-or-name>
+audio_device: HK-MIC
+# Options are : null, 0, 1, 2, 3 (when using indices), or the name of the device ('HK-MIC1', 'MacBook Pro Microphone', etc.). See startup log or run: python strip_monitor.py --list-devices
+
+# openSMILE prosody
+opensmile_interval: 0.5 #(0.25 min I think. 1.0 is good). Seconds between calls (latency, not resolution — always 10ms frames)
+opensmile_margin: 0.1 # (0.2 is good?). Overlap margin to absorb edge effects (seconds)
+
+# Emotion (sliding window)
+# Note that openSMILE features are computed every 10ms whatever the window size. Also, because of this, the window and hop sizes should be multiples of 0.01s for best results.
+emo_window: 2 #(2.0 is good). Analysis window length (seconds)
+emo_hop: 0.5 # (0.5 is good). Step between predictions (seconds, >= inference time)
+
+# Emotion display behaviour
+emo_decay_active: true # exponential decay on emotion bars over time
+emo_decay_tau: 2.0 # decay time constant in seconds (larger = slower fade)
+emo_zero_on_silence: false # immediately zero bars when VAD gate is closed
+
+# VAD
+vad_active: false # initial state — toggle at runtime from browser UI
+vad_threshold: 0.3
+vad_interval: 0.25 # how often the VAD thread runs (seconds)
+vad_grab_sec: 0.5 # audio window analysed per VAD tick (seconds)
+vad_grid_hz: 100 # VAD timeline resolution (Hz) — matches LLD frame rate
+
+# Emotion gating: skip an inference unless this fraction of the emo_window
+# is voiced according to VAD. Ignored when VAD is off (gate stays open).
+emo_min_voiced_frac: 0.5
+
+# Logging (CSV). When active: the system will write a CSV file with all features and predictions.
+log_active: false
+log_interval: 0.25 # seconds between CSV/OSC writes
+
+# OSC streaming (independent of logging)
+osc_active: false # auto-start OSC streaming on launch
+
+# Display
+display: false # matplotlib GUI window. Default off on Pi (headless); CLI --no-display overrides.
+display_n: 200 # number of prosody frames to show (x 10ms = 5s)
+display_refresh_ms: 150 # matplotlib refresh rate
+
+# OSC defaults
+osc_ip: '127.0.0.1'
+osc_port: 9000
+# osc_prefix is auto-built as /dev/<device_id>/speech — do NOT set manually
+# unless you really know what you're doing (the collector / bridge expect
+# the /dev/<id>/... namespace).
+osc_prefix: '/speech'
+
+# Remote-control listener (OSC). Each instance on the same Pi MUST use
+# a distinct port. Convention: 9001 for mic 1, 9002 for mic 2.
+ctrl_port: 9001
+
+# Self-telemetry (RSS / CPU% / temperature) emitted on /dev/<id>/stats/self.
+self_stats_interval: 5.0
+
+# Processing toggles (initial state — changed at runtime via browser UI / OSC).
+# Defaults are all OFF so the Pi can launch at boot, load the emotion model,
+# and idle waiting for the operator to enable stages from the Mac.
+prosody_active: false
+emotion_active: false # model still loads at startup; this only gates processing
+
+# Model
+emotion_model: 'base' #('base' works nice) # Can be base (~90M) or seed (~20M)
+
+# Output
+output_dir: 'output'

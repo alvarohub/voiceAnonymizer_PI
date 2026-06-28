@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Speech → Emotion Receiver</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: #1a1a2e;
+        overflow: hidden;
+        font-family: monospace;
+      }
+      #status {
+        position: fixed;
+        top: 8px;
+        right: 12px;
+        color: #888;
+        font-size: 11px;
+        z-index: 10;
+      }
+      #device-picker {
+        position: fixed;
+        top: 6px;
+        left: 12px;
+        z-index: 10;
+        background: #2a2a3e;
+        color: #ddd;
+        border: 1px solid #444;
+        border-radius: 3px;
+        font-family: monospace;
+        font-size: 11px;
+        padding: 2px 6px;
+        cursor: pointer;
+      }
+      #device-picker:focus {
+        outline: 1px solid #6cf;
+      }
+    </style>
+  </head>
+  <body>
+    <select id="device-picker" title="Select device">
+      <option value="">(no device)</option>
+    </select>
+    <div id="status">connecting…</div>
+    <script src="sketch.js"></script>
+  </body>
+</html>

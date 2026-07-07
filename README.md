@@ -131,18 +131,31 @@ If the bundle is missing `models/` or `wheelhouse/`, `install_from_bundle.sh` st
 
 Use this section when you are preparing the USB drive for someone else. The goal is that the operator can later follow only section 2.
 
-Bundle contents to prepare:
+The actual code is the whole `SPEECH_RECORD_ANALYSIS/` repository folder. Start from a fresh GitHub clone or a copy of this project folder, then add the offline-only folders `models/` and `wheelhouse/` inside it.
+
+The prepared USB bundle should look like this. The list below is abbreviated; the important point is that the normal code files are present at the top level alongside the offline assets.
 
 ```text
 SPEECH_RECORD_ANALYSIS/
-  models/
+  README.md
+  strip_monitor.py
+  setup_pi.sh
+  install_from_bundle.sh
+  prepare_wheelhouse.sh
+  requirements-pi.txt
+  config_mic1.example.yaml
+  config_mic2.example.yaml
+  src/
+  receiver/
+  docs/
+  models/                       # added by the USB preparer, not downloaded by the operator
     iic/emotion2vec_plus_base/model.pt
     silero-vad/
-  wheelhouse/
+  wheelhouse/                   # added by the USB preparer on a connected Raspberry Pi
     *.whl
 ```
 
-The repository folder that goes onto the USB drive must include the model folders above. If they are missing, see sections 12 and 14 for the emotion2vec and VAD copy details. `wheelhouse/` must be built once on a connected Raspberry Pi with the same OS and Python version as the offline Pis.
+In other words, do not create a USB drive that contains only `models/` and `wheelhouse/`. The operator needs the scripts and Python code too. The repository folder that goes onto the USB drive must include the model folders above. If they are missing, see sections 12 and 14 for the emotion2vec and VAD copy details. `wheelhouse/` must be built once on a connected Raspberry Pi with the same OS and Python version as the offline Pis.
 
 To finish preparing the USB bundle on a connected Pi:
 

@@ -650,7 +650,14 @@ def _schedule_log_activation(start_at_unix_ms: str, start_at_iso: str):
 
 
 def _csv_header():
-    cols = ["session_start_unix_ms", "session_start_iso", "time_ms", "vad"]
+    cols = [
+        "session_start_unix_ms",
+        "session_start_iso",
+        "timestamp_unix_ms",
+        "timestamp_iso",
+        "time_ms",
+        "vad",
+    ]
     cols += [f[0] for f in FEATURES]
     # Emotion model is always loaded → columns always present. Rows written
     # while emotion is toggled OFF will leave these blank.
@@ -1274,6 +1281,8 @@ def _logger_thread():
         # soon as OSC is enabled, even with prosody/emotion/VAD all off.
 
         now = time.time()
+        timestamp_unix_ms = int(now * 1000)
+        timestamp_iso = datetime.utcfromtimestamp(now).isoformat(timespec="milliseconds") + "Z"
         feature_means = {key: (last_frame.get(key, float("nan"))
                                 if last_frame is not None else float("nan"))
                          for key, _, _, _, _ in FEATURES}
@@ -1300,6 +1309,8 @@ def _logger_thread():
             row = [
                 _log_session_start_unix_ms[0],
                 _log_session_start_iso[0],
+                timestamp_unix_ms,
+                timestamp_iso,
                 ms,
                 vad,
             ]  # tri-state: -1 (VAD off), 0 (silent), 1 (speech)

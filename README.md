@@ -33,6 +33,7 @@ Reference and troubleshooting:
 - [5. Processing Pipeline](#5-processing-pipeline)
 - [6. Repository Layout](#6-repository-layout)
 - [10. Central CSV Collection](#10-central-csv-collection)
+- [Central Collection, CSV Logs, And Data Meaning](docs/central_collection.md)
 - [11. Control Commands](#11-control-commands)
 - [12. Emotion Models](#12-emotion-models)
 - [15. Raspberry Pi Setup Reference](#15-raspberry-pi-setup-reference)
@@ -107,9 +108,9 @@ source venv/bin/activate
 python strip_monitor.py --list-devices
 ```
 
-8. Edit `pi_id`, `mic_id`, `audio_device`, `ctrl_port`, and `osc_ip` in `config_mic1.yaml`. For a two-microphone Pi, edit `config_mic2.yaml` too.
+8. Edit `pi_id`, `mic_id`, `audio_device`, `ctrl_port`, and `osc_ip` in `config_mic1.yaml`; see [7. Microphone Configuration](#7-microphone-configuration) for what each field means and examples. For a two-microphone Pi, edit `config_mic2.yaml` too.
 9. Start one mic with `./start_audio_server.sh --config config_mic1.yaml`, or two mics with `./start_two_mics.sh`.
-10. On the central computer, run `./run_web.sh` to open the browser receiver.
+10. On the central computer, run `./run_web.sh` to open the browser receiver; see [9. Central Receiver](#9-central-receiver) for what the central computer does and does not need to know.
 
 Replace `INSTALL_DRIVE` with whatever name appeared when you ran `ls /media/$USER`. The `~` symbol means the current user's home folder, so the destination becomes `/home/<username>/SPEECH_RECORD_ANALYSIS`.
 
@@ -370,6 +371,29 @@ Bridge defaults:
 - Browser WebSocket: `8765`
 - Browser HTTP server: `3000`
 
+The central computer does not need to know the Linux microphone device names such as `HK-MIC1`. Those names are local to each Pi and are used only in `config_mic1.yaml` or `config_mic2.yaml` so the Pi can open the correct audio input. Once a Pi process is running, it broadcasts a `/hello` message with its logical `device_id`, `pi_id`, `mic_id`, hostname, and control port. The bridge uses that heartbeat, plus OSC addresses under `/dev/<device_id>/...`, to populate the browser device list and route control commands back to the right Pi process.
+
+Receiver GUI with simulated data:
+
+![Central receiver live view](docs/images/central-receiver-live.png)
+
+Compact browser view:
+
+![Central receiver compact view](docs/images/central-receiver-compact.png)
+
+These screenshots use fake OSC traffic, not real microphone data. To regenerate them, use three terminals on a machine with Google Chrome installed:
+
+```bash
+# Terminal 1
+./run_web.sh
+
+# Terminal 2
+node docs/demo_receiver_osc.js
+
+# Terminal 3
+node docs/capture_receiver_screenshots.js
+```
+
 Central receiver dependencies:
 
 - Node.js and `npm` must already be installed on the central computer.
@@ -380,16 +404,20 @@ Central receiver dependencies:
 
 Run this on the central computer if you want CSV files collected centrally during the session.
 
+For a detailed explanation of the central collector, OSC topics, CSV schemas, timestamps, value ranges, model rates, VAD gating, and runtime switches, see [docs/central_collection.md](docs/central_collection.md).
+
 Run the OSC collector on the central computer. Use a Python environment that has `python-osc` installed; if this repository already has a local `venv/`, activate it first:
 
 ```bash
 source venv/bin/activate
-python osc_collector.py --host 0.0.0.0 --port 9000 --out output
+python osc_collector.py --bind 0.0.0.0 --port 9000 --out output
 ```
 
 Each discovered device writes a separate CSV stream under `output/`.
 
-To copy CSV logs from Pis after a run, the central computer must be able to SSH into the Pis by hostname or IP address:
+To copy CSV logs from Pis after a run, use either network copy or physical SD-card retrieval.
+
+Option A: copy over the network. The central computer must be able to SSH into the Pis by hostname or IP address:
 
 ```bash
 ./gather_logs.sh output/session_001 pi1.local pi2.local
@@ -400,6 +428,8 @@ If the repository lives at a different path on the Pi, pass it explicitly:
 ```bash
 ./gather_logs.sh --remote-path SPEECH_RECORD_ANALYSIS/output/ output/session_001 pi1.local
 ```
+
+Option B: collect the Pi physically after a long run, remove or mount its SD card on another computer, and copy the Pi-side `SPEECH_RECORD_ANALYSIS/output/` folder from the card. Pi-local CSV logs include full date information in `session_start_unix_ms`, `session_start_iso`, `timestamp_unix_ms`, and `timestamp_iso`, so copied files can still be aligned after the fact.
 
 ## 11. Control Commands
 

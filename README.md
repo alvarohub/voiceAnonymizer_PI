@@ -34,6 +34,8 @@ Reference and troubleshooting:
 - [6. Repository Layout](#6-repository-layout)
 - [10. Central CSV Collection](#10-central-csv-collection)
 - [Central Collection, CSV Logs, And Data Meaning](docs/central_collection.md)
+- [PDF copy of this README](docs/pdf/README.pdf)
+- [PDF copy of the central collection guide](docs/pdf/central_collection.pdf)
 - [11. Control Commands](#11-control-commands)
 - [12. Emotion Models](#12-emotion-models)
 - [15. Raspberry Pi Setup Reference](#15-raspberry-pi-setup-reference)

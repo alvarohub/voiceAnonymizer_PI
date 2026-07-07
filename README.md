@@ -85,7 +85,15 @@ Install on each Pi:
 ls /media/$USER
 ```
 
-4. Copy the prepared folder from the USB drive to the Pi. This example assumes the drive name is `INSTALL_DRIVE`:
+4. Copy the prepared folder from the USB drive to the Pi. The recommended destination is the Pi user's home folder:
+
+```text
+/home/<pi-user>/SPEECH_RECORD_ANALYSIS
+```
+
+In shell commands this is written as `~/SPEECH_RECORD_ANALYSIS`. Keeping the project in the user's home folder is convenient because the Pi user can write local config files, logs, model cache files, and the Python `venv/` there without special permissions.
+
+This example assumes the drive name is `INSTALL_DRIVE`:
 
 ```bash
 cp -a /media/$USER/INSTALL_DRIVE/SPEECH_RECORD_ANALYSIS ~/SPEECH_RECORD_ANALYSIS
@@ -115,6 +123,8 @@ python strip_monitor.py --list-devices
 10. On the central computer, run `./run_web.sh` to open the browser receiver; see [9. Central Receiver](#9-central-receiver) for what the central computer does and does not need to know.
 
 Replace `INSTALL_DRIVE` with whatever name appeared when you ran `ls /media/$USER`. The `~` symbol means the current user's home folder, so the destination becomes `/home/<username>/SPEECH_RECORD_ANALYSIS`.
+
+Avoid copying the project into system folders such as `/usr/local/` or `/opt/` unless you deliberately want to manage permissions and service setup yourself. For this handoff workflow, the home-folder path is simpler and safer.
 
 If the destination already exists and you want a fresh copy, move the old folder aside first:
 

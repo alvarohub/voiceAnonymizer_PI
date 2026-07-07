@@ -7,6 +7,8 @@ contain speech, avoiding the "random high-confidence on silence" problem.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import torch
 
@@ -15,10 +17,23 @@ class SileroVAD:
     """Lightweight wrapper around Silero VAD (runs on CPU, ~1 ms per chunk)."""
 
     def __init__(self, threshold: float = 0.3, sample_rate: int = 16000):
-        self._model, utils = torch.hub.load(
-            "snakers4/silero-vad", "silero_vad",
-            trust_repo=True, force_reload=False,
-        )
+        project_root = Path(__file__).resolve().parents[1]
+        local_repo = project_root / "models" / "silero-vad"
+        if (local_repo / "hubconf.py").exists():
+            print(f"[vad] Loading Silero VAD from project-local: {local_repo}")
+            self._model, utils = torch.hub.load(
+                str(local_repo),
+                "silero_vad",
+                source="local",
+                trust_repo=True,
+                force_reload=False,
+            )
+        else:
+            print("[vad] Loading Silero VAD from torch.hub cache or online source")
+            self._model, utils = torch.hub.load(
+                "snakers4/silero-vad", "silero_vad",
+                trust_repo=True, force_reload=False,
+            )
         self._get_speech_ts = utils[0]      # get_speech_timestamps
         self._threshold = threshold
         self._sr = sample_rate

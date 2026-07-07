@@ -14,6 +14,10 @@ models/*
 # Modelscope cache (if symlinked or copied here)
 .cache/
 
+# Offline Python dependency bundle for USB installs (large, platform-specific)
+wheelhouse/
+.wheelhouse-venv/
+
 # Runtime output
 output/
 logs/

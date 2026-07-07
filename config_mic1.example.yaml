@@ -23,7 +23,7 @@ opensmile_interval: 0.5
 opensmile_margin: 0.1
 
 # Emotion
-emotion_model: 'seed' # Model (base or seed). Base takes about 1GB of RAM, seed about 200MB. Both are accurate, with seed slightly better on some emotions.
+emotion_model: 'base' # Model (base or seed). The offline USB bundle currently includes base; use seed only if models/iic/emotion2vec_plus_seed/model.pt is also present.
 emotion_load: true # Set false to skip loading the emotion model entirely on low-memory Pis. If false, emotion cannot be turned on later.
 emo_window: 2
 emo_hop: 0.5

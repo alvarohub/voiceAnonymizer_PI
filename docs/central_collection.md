@@ -88,7 +88,7 @@ Control commands have an application-level acknowledgement. When the browser bri
 /dev/<device_id>/ack <command> <cmd_id> <ok> <message>
 ```
 
-The bridge waits `750` ms by default. On a wired Ethernet network this is a conservative timeout: ordinary round trips should be far below it, but the operator sees a warning quickly if a command packet or reply is lost. Set `ACK_TIMEOUT_MS` before starting the bridge if a different threshold is needed.
+The bridge and `broadcast_ctrl.py` wait `150` ms by default. On a wired Ethernet network this is still much longer than a normal round trip, but short enough that the operator sees a warning quickly if a command packet or reply is lost. Set `ACK_TIMEOUT_MS` before starting the bridge, or pass `--ack-timeout-ms` to `broadcast_ctrl.py`, if a different threshold is needed.
 
 This ACK layer applies only to control commands. Live telemetry packets such as VAD, prosody, emotion, and self-telemetry remain best-effort UDP streams.
 

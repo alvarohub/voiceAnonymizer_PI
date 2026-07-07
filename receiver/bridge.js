@@ -23,7 +23,7 @@ const OSC_PORT = parseInt(process.env.OSC_PORT || '9000', 10);
 const WS_PORT = parseInt(process.env.WS_PORT || '8765', 10);
 const HTTP_PORT = parseInt(process.env.HTTP_PORT || '3000', 10);
 const CTRL_PORT_FALLBACK = parseInt(process.env.CTRL_PORT || '9001', 10); // default when registry has no entry
-const ACK_TIMEOUT_MS = parseInt(process.env.ACK_TIMEOUT_MS || '750', 10);
+const ACK_TIMEOUT_MS = parseInt(process.env.ACK_TIMEOUT_MS || '150', 10);
 const ACK_SENTINEL = '__ack__';
 // Fallback CTRL target if no OSC has been received yet (env override or localhost).
 const CTRL_HOST_FALLBACK = process.env.CTRL_HOST || '127.0.0.1';

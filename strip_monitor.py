@@ -848,6 +848,25 @@ def _emit_state():
         print(f"[OSC] state emit: {e}", file=sys.stderr)
 
 
+def _state_summary() -> str:
+    return (
+        f"osc={int(_osc_on)} "
+        f"log_active={int(_log_on)} "
+        f"log_open={int(_log_session_open())} "
+        f"log_paused={int(_log_session_paused())} "
+        f"log_scheduled={int(_log_session_scheduled())} "
+        f"vad={int(_proc_vad[0])} "
+        f"emotion={int(_proc_emotion[0])} "
+        f"emotion_loaded={int(_emotion_loaded[0])} "
+        f"prosody={int(_proc_prosody[0])}"
+    )
+
+
+def _ctrl_query_state(addr, *args):
+    _emit_state()
+    return _state_summary()
+
+
 def _set_proc(flag_ref, name: str, on: bool):
     """Toggle a processing stage at runtime and notify the browser."""
     flag_ref[0] = bool(on)
@@ -912,7 +931,9 @@ def _handle_ctrl_command(client_addr, addr: str, command: str, action, *args):
     ok = True
     message = "ok"
     try:
-        action(client_addr, addr, *normal_args)
+        result = action(client_addr, addr, *normal_args)
+        if result is not None:
+            message = str(result)
     except Exception as e:
         ok = False
         message = str(e)
@@ -987,7 +1008,7 @@ def _start_ctrl_listener():
     map_ctrl("log_pause", lambda client, addr, *a: log_pause())
     map_ctrl("log_resume", lambda client, addr, *a: log_resume())
     map_ctrl("log_stop", lambda client, addr, *a: log_stop())
-    map_ctrl("query_state", lambda client, addr, *a: _emit_state())
+    map_ctrl("query_state", lambda client, addr, *a: _ctrl_query_state(addr, *a))
     # Per-stage processing toggles
     map_ctrl("vad_on",      lambda client, addr, *a: _set_proc(_proc_vad,     "VAD",     True))
     map_ctrl("vad_off",     lambda client, addr, *a: _set_proc(_proc_vad,     "VAD",     False))

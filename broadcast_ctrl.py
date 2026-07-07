@@ -3,8 +3,9 @@
 
 Examples:
   python3 broadcast_ctrl.py --list
-  python3 broadcast_ctrl.py log_start --expected 12 --timeout 10
-    python3 broadcast_ctrl.py log_start --expected 12 --delay-s 3
+    python3 broadcast_ctrl.py status --expected 12 --timeout 10
+    python3 broadcast_ctrl.py log_start --expected 12 --timeout 10 --delay-s 3
+    python3 broadcast_ctrl.py log_start --pi 4 --mic 1
   python3 broadcast_ctrl.py log_stop --expected 12 --timeout 10
   python3 broadcast_ctrl.py emotion_off --pi 3
   python3 broadcast_ctrl.py vad_on --device 2-1 --device 2-2
@@ -17,6 +18,7 @@ different port.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import threading
 import time
@@ -33,6 +35,7 @@ def _pythonosc_error(exc: ImportError) -> SystemExit:
 
 
 CTRL_COMMANDS = [
+    "status",
     "osc_start",
     "osc_stop",
     "log_start",
@@ -48,6 +51,9 @@ CTRL_COMMANDS = [
     "prosody_off",
 ]
 
+ACK_SENTINEL = "__ack__"
+DEFAULT_ACK_TIMEOUT_MS = 150
+
 
 @dataclass(frozen=True)
 class DeviceInfo:
@@ -58,6 +64,24 @@ class DeviceInfo:
     ip: str
     ctrl_port: int
     version: str
+
+
+@dataclass(frozen=True)
+class PendingCommand:
+    device: DeviceInfo
+    command: str
+    cmd_id: str
+    sent_at: float
+
+
+@dataclass(frozen=True)
+class AckRecord:
+    device_id: str
+    command: str
+    cmd_id: str
+    ok: bool
+    message: str
+    received_at: float
 
 
 def _sort_part(value: str):
@@ -166,12 +190,15 @@ def discover_devices(port: int, timeout: float, expected: int) -> list[DeviceInf
     return registry.snapshot()
 
 
-def select_targets(devices: list[DeviceInfo], wanted_devices: set[str], wanted_pis: set[str]) -> list[DeviceInfo]:
+def select_targets(devices: list[DeviceInfo], wanted_devices: set[str],
+                   wanted_pis: set[str], wanted_mics: set[str]) -> list[DeviceInfo]:
     targets = []
     for device in devices:
         if wanted_devices and device.device_id not in wanted_devices:
             continue
         if wanted_pis and device.pi_id not in wanted_pis:
+            continue
+        if wanted_mics and device.mic_id not in wanted_mics:
             continue
         targets.append(device)
     return targets
@@ -191,6 +218,7 @@ def print_devices(devices: list[DeviceInfo]):
 
 
 def command_args(command: str, args) -> list[str]:
+    command = actual_command(command)
     if command != "log_start":
         return []
     now_ms = int(time.time() * 1000)
@@ -207,25 +235,145 @@ def command_args(command: str, args) -> list[str]:
     return [str(target_ms), target_iso, str(target_ms), target_iso]
 
 
-def send_command(command: str, devices: list[DeviceInfo], args) -> None:
+def actual_command(command: str) -> str:
+    return "query_state" if command == "status" else command
+
+
+class AckRegistry:
+    def __init__(self, expected: dict[str, PendingCommand]):
+        self.expected = expected
+        self.records: dict[str, AckRecord] = {}
+        self._cond = threading.Condition()
+
+    def on_ack(self, client_addr, address, *args):
+        match = re.match(r"^/dev/([^/]+)/ack$", address)
+        if not match or len(args) < 3:
+            return
+        device_id = match.group(1)
+        command = str(args[0])
+        cmd_id = str(args[1])
+        if cmd_id not in self.expected:
+            print(f"[ACK ? ] {device_id:<8s} {command:<12s} unexpected cmd_id={cmd_id}")
+            return
+        ok_raw = args[2]
+        ok = ok_raw is True or ok_raw == 1 or ok_raw == "1" or str(ok_raw).lower() == "true"
+        message = str(args[3]) if len(args) >= 4 else "ok"
+        with self._cond:
+            self.records[cmd_id] = AckRecord(
+                device_id=device_id,
+                command=command,
+                cmd_id=cmd_id,
+                ok=ok,
+                message=message,
+                received_at=time.time(),
+            )
+            self._cond.notify_all()
+
+    def wait(self, timeout_s: float):
+        deadline = time.time() + timeout_s
+        with self._cond:
+            while len(self.records) < len(self.expected):
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                self._cond.wait(timeout=remaining)
+            return dict(self.records)
+
+
+def send_command(command: str, devices: list[DeviceInfo], args) -> bool:
     try:
         from pythonosc.udp_client import SimpleUDPClient
+        from pythonosc.dispatcher import Dispatcher
+        from pythonosc.osc_server import ThreadingOSCUDPServer
     except ImportError as exc:
         raise _pythonosc_error(exc) from exc
 
-    cmd_args = command_args(command, args)
+    send_name = actual_command(command)
+    cmd_args = command_args(send_name, args)
+    pending: dict[str, PendingCommand] = {}
 
-    if command == "osc_start":
+    ack_server = None
+    ack_thread = None
+    ack_port = None
+    ack_registry = None
+    if not args.no_ack:
+        for index, device in enumerate(devices, 1):
+            cmd_id = f"{send_name}-{device.device_id}-{int(time.time() * 1000)}-{index}"
+            pending[cmd_id] = PendingCommand(
+                device=device,
+                command=send_name,
+                cmd_id=cmd_id,
+                sent_at=0.0,
+            )
+        ack_registry = AckRegistry(pending)
+        disp = Dispatcher()
+        for device in devices:
+            disp.map(f"/dev/{device.device_id}/ack", ack_registry.on_ack, needs_reply_address=True)
+        ack_server = ThreadingOSCUDPServer(("0.0.0.0", int(args.ack_port)), disp)
+        ack_port = int(ack_server.server_address[1])
+        ack_thread = threading.Thread(target=ack_server.serve_forever, daemon=True, name="ctrl-ack")
+        ack_thread.start()
+
+    if send_name == "osc_start":
         print("[NOTE   ] /ctrl/osc_start routes OSC back to the host running this command")
 
-    for device in devices:
+    pending_ids = list(pending.keys())
+    for index, device in enumerate(devices, 1):
+        args_to_send = list(cmd_args)
+        cmd_id = None
+        if not args.no_ack:
+            cmd_id = pending_ids[index - 1]
+            pending[cmd_id] = PendingCommand(
+                device=device,
+                command=send_name,
+                cmd_id=cmd_id,
+                sent_at=time.time(),
+            )
+            args_to_send.extend([ACK_SENTINEL, cmd_id, str(ack_port)])
         client = SimpleUDPClient(device.ip, device.ctrl_port)
-        client.send_message(f"/ctrl/{command}", cmd_args)
+        client.send_message(f"/ctrl/{send_name}", args_to_send)
         suffix = f" {cmd_args}" if cmd_args else ""
+        ack_note = f" ack={cmd_id}" if cmd_id else ""
         print(
-            f"[SEND   ] /ctrl/{command}{suffix} -> {device.device_id}  "
+            f"[SEND   ] /ctrl/{send_name}{suffix}{ack_note} -> {device.device_id}  "
             f"({device.hostname} @ {device.ip}:{device.ctrl_port})"
         )
+
+    if args.no_ack:
+        return True
+
+    assert ack_registry is not None
+    records = ack_registry.wait(args.ack_timeout_ms / 1000.0)
+    if ack_server is not None:
+        ack_server.shutdown()
+        ack_server.server_close()
+    if ack_thread is not None:
+        ack_thread.join(timeout=1.0)
+
+    all_ok = True
+    print("")
+    for cmd_id, item in pending.items():
+        record = records.get(cmd_id)
+        if record is None:
+            all_ok = False
+            print(
+                f"[ACK TO ] {item.device.device_id:<8s} {item.command:<12s} "
+                f"no reply after {args.ack_timeout_ms}ms"
+            )
+            continue
+        elapsed_ms = int(round((record.received_at - item.sent_at) * 1000.0))
+        status = "OK" if record.ok else "ERR"
+        if not record.ok:
+            all_ok = False
+        if command == "status":
+            print(f"[STATUS ] {item.device.device_id:<8s} {record.message} ({elapsed_ms}ms)")
+        else:
+            print(
+                f"[ACK {status:<3s}] {item.device.device_id:<8s} {record.command:<12s} "
+                f"{elapsed_ms}ms  {record.message}"
+            )
+
+    return all_ok
 
 
 def parse_args():
@@ -283,6 +431,29 @@ def parse_args():
         help="Target all devices for one pi_id such as 3. Repeatable.",
     )
     parser.add_argument(
+        "--mic",
+        action="append",
+        default=[],
+        help="Target all devices for one mic_id such as 1. Repeatable.",
+    )
+    parser.add_argument(
+        "--ack-timeout-ms",
+        type=int,
+        default=DEFAULT_ACK_TIMEOUT_MS,
+        help=f"How long to wait for command ACKs (default {DEFAULT_ACK_TIMEOUT_MS}ms).",
+    )
+    parser.add_argument(
+        "--ack-port",
+        type=int,
+        default=0,
+        help="Local UDP port for command ACK replies (default 0 = choose automatically).",
+    )
+    parser.add_argument(
+        "--no-ack",
+        action="store_true",
+        help="Send commands without waiting for command acknowledgements.",
+    )
+    parser.add_argument(
         "--delay-s",
         type=float,
         default=0.0,
@@ -324,7 +495,8 @@ def main() -> int:
 
     wanted_devices = {value.strip() for value in args.device if value.strip()}
     wanted_pis = {value.strip() for value in args.pi if value.strip()}
-    targets = select_targets(devices, wanted_devices, wanted_pis)
+    wanted_mics = {value.strip() for value in args.mic if value.strip()}
+    targets = select_targets(devices, wanted_devices, wanted_pis, wanted_mics)
 
     if args.list:
         return 0
@@ -334,9 +506,8 @@ def main() -> int:
         return 1
 
     print("")
-    print(f"[TARGET ] sending /ctrl/{args.command} to {len(targets)} device(s)")
-    send_command(args.command, targets, args)
-    return 0
+    print(f"[TARGET ] sending /ctrl/{actual_command(args.command)} to {len(targets)} device(s)")
+    return 0 if send_command(args.command, targets, args) else 3
 
 
 if __name__ == "__main__":

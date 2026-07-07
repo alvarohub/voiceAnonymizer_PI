@@ -409,7 +409,7 @@ Bridge defaults:
 - OSC UDP input from Pis: `9000`
 - Browser WebSocket: `8765`
 - Browser HTTP server: `3000`
-- Command ACK timeout: `750` ms (`ACK_TIMEOUT_MS=750`)
+- Command ACK timeout: `150` ms (`ACK_TIMEOUT_MS=150`)
 
 The central computer does not need to know the Linux microphone device names such as `HK-MIC1`. Those names are local to each Pi and are used only in `config_mic1.yaml` or `config_mic2.yaml` so the Pi can open the correct audio input. Once a Pi process is running, it broadcasts a `/hello` message with its logical `device_id`, `pi_id`, `mic_id`, hostname, and control port. The bridge uses that heartbeat, plus OSC addresses under `/dev/<device_id>/...`, to populate the browser device list and route control commands back to the right Pi process.
 
@@ -487,9 +487,33 @@ Common controls:
 | `/ctrl/prosody_on`, `/ctrl/prosody_off` | none                        | Toggle prosody extraction.                                   |
 | `/ctrl/emotion_on`, `/ctrl/emotion_off` | none                        | Toggle emotion inference if the model was loaded at startup. |
 
-`broadcast_ctrl.py` can fan out the same command to multiple discovered devices.
+`broadcast_ctrl.py` can fan out the same command to multiple discovered devices without opening the graphical receiver. It discovers devices from `/hello`, applies optional filters, sends the command, and waits for ACK replies by default.
 
-Command delivery has an application-level acknowledgement when commands are sent through the browser receiver/bridge. The bridge appends a command id to each `/ctrl/...` packet; the Pi replies on OSC with `/dev/<device_id>/ack`; and the GUI shows the command as waiting, acknowledged, late, failed, or timed out. The default timeout is `750` ms, which is intentionally much longer than normal wired-Ethernet latency but still short enough to warn the operator quickly if a command packet is lost. Set `ACK_TIMEOUT_MS` before launching `run_web.sh` if a slower network needs a different threshold.
+Examples:
+
+```bash
+# Report all connected mic processes discovered during a 10-second window.
+python3 broadcast_ctrl.py --list --timeout 10
+
+# Ask every discovered device for its current control/status flags.
+python3 broadcast_ctrl.py status --expected 12 --timeout 10
+
+# Start recording on every discovered device at nearly the same time.
+python3 broadcast_ctrl.py log_start --expected 12 --timeout 10 --delay-s 2
+
+# Start recording only Pi 4, mic 1.
+python3 broadcast_ctrl.py log_start --pi 4 --mic 1
+
+# The same target can be written directly as device_id "4-1".
+python3 broadcast_ctrl.py log_start --device 4-1
+
+# Stop all mic 1 processes across all Pis.
+python3 broadcast_ctrl.py log_stop --mic 1 --timeout 10
+```
+
+If another process is already listening on UDP `9000` for `/hello` discovery, such as `receiver/bridge.js` or `osc_collector.py`, stop it first or run the CLI on a different discovery port that the Pis are configured to broadcast to.
+
+Command delivery has an application-level acknowledgement when commands are sent through the browser receiver/bridge or through `broadcast_ctrl.py`. The sender appends a command id to each `/ctrl/...` packet; the Pi replies on OSC with `/dev/<device_id>/ack`; and the GUI or terminal shows the command as waiting, acknowledged, late, failed, or timed out. The default timeout is `150` ms, which is much longer than a normal wired-Ethernet round trip but short enough to warn the operator quickly if a command packet is lost. Set `ACK_TIMEOUT_MS` before launching `run_web.sh`, or pass `--ack-timeout-ms` to `broadcast_ctrl.py`, if a slower network needs a different threshold.
 
 Live telemetry packets such as VAD, prosody, emotion, and rate updates remain best-effort UDP. The ACK mechanism is only for operator/control commands.
 

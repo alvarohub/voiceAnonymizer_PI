@@ -409,6 +409,7 @@ Bridge defaults:
 - OSC UDP input from Pis: `9000`
 - Browser WebSocket: `8765`
 - Browser HTTP server: `3000`
+- Command ACK timeout: `750` ms (`ACK_TIMEOUT_MS=750`)
 
 The central computer does not need to know the Linux microphone device names such as `HK-MIC1`. Those names are local to each Pi and are used only in `config_mic1.yaml` or `config_mic2.yaml` so the Pi can open the correct audio input. Once a Pi process is running, it broadcasts a `/hello` message with its logical `device_id`, `pi_id`, `mic_id`, hostname, and control port. The bridge uses that heartbeat, plus OSC addresses under `/dev/<device_id>/...`, to populate the browser device list and route control commands back to the right Pi process.
 
@@ -487,6 +488,10 @@ Common controls:
 | `/ctrl/emotion_on`, `/ctrl/emotion_off` | none                        | Toggle emotion inference if the model was loaded at startup. |
 
 `broadcast_ctrl.py` can fan out the same command to multiple discovered devices.
+
+Command delivery has an application-level acknowledgement when commands are sent through the browser receiver/bridge. The bridge appends a command id to each `/ctrl/...` packet; the Pi replies on OSC with `/dev/<device_id>/ack`; and the GUI shows the command as waiting, acknowledged, late, failed, or timed out. The default timeout is `750` ms, which is intentionally much longer than normal wired-Ethernet latency but still short enough to warn the operator quickly if a command packet is lost. Set `ACK_TIMEOUT_MS` before launching `run_web.sh` if a slower network needs a different threshold.
+
+Live telemetry packets such as VAD, prosody, emotion, and rate updates remain best-effort UDP. The ACK mechanism is only for operator/control commands.
 
 ## 12. Emotion Models
 

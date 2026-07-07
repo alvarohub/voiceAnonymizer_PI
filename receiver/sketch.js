@@ -54,6 +54,7 @@ let vadRunning = false;
 let emotionRunning = false;
 let emotionLoaded = true;
 let prosodyRunning = false;
+let ackStatus = { status: 'idle', receivedAt: 0 };
 
 // Per-address send rate (Hz), keyed by full OSC address; updated via /stats/rate
 let rateByAddr = {};
@@ -96,6 +97,10 @@ function wsConnect() {
       if (msg.type === 'state') {
         if (msg.osc !== undefined) oscRunning = msg.osc;
         if (msg.log !== undefined) logRunning = msg.log;
+      }
+      // Command acknowledgement status from bridge/Pi round trip.
+      if (msg.type === 'ack_status') {
+        ackStatus = { ...msg, receivedAt: Date.now() };
       }
       // Pi discovery list from bridge
       if (msg.type === 'pi_list') {
@@ -275,6 +280,28 @@ function inRect(mx, my, x, y, w, h) {
   return mx >= x && mx <= x + w && my >= y && my <= y + h;
 }
 
+function ackDisplay() {
+  if (!ackStatus || ackStatus.status === 'idle') {
+    return { text: 'cmd: idle', color: [120, 120, 130] };
+  }
+  const cmd = ackStatus.cmd || 'cmd';
+  const target = ackStatus.target_device ? ` ${ackStatus.target_device}` : '';
+  const elapsed = ackStatus.elapsed_ms !== undefined ? `${ackStatus.elapsed_ms}ms` : '';
+  if (ackStatus.status === 'pending') {
+    return { text: `cmd:${target} ${cmd} waiting ACK`, color: [245, 205, 90] };
+  }
+  if (ackStatus.status === 'ok') {
+    return { text: `cmd:${target} ${cmd} ACK ${elapsed}`, color: [110, 245, 130] };
+  }
+  if (ackStatus.status === 'timeout') {
+    return { text: `cmd:${target} ${cmd} ACK TIMEOUT ${elapsed}`, color: [255, 95, 80] };
+  }
+  if (ackStatus.status === 'late') {
+    return { text: `cmd:${target} ${cmd} ACK LATE`, color: [255, 170, 80] };
+  }
+  return { text: `cmd:${target} ${cmd} ACK ERROR`, color: [255, 95, 80] };
+}
+
 // Button layout (computed each frame)
 function btnLayout() {
   let y = height - CTRL_H + 16;
@@ -422,6 +449,9 @@ function draw() {
   const emoStatus = emotionLoaded ? (emotionRunning ? 'emo: active' : 'emo: ready') : 'emo: not loaded';
   text(logStatus, 12, stateY);
   text(emoStatus, 12, stateY + 13);
+  const ack = ackDisplay();
+  fill(ack.color[0], ack.color[1], ack.color[2]);
+  text(ack.text, 12, stateY + 26);
   // ── Emotion label (top center) ───────────────────────────────
   if (emotionLabel) {
     let ec = EMO_COLORS[emotionLabel] || [200, 200, 200];

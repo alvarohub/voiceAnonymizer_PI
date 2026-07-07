@@ -875,6 +875,52 @@ def _ctrl_log_start(addr, *args):
               start_at_iso=start_at_iso)
 
 
+_ACK_SENTINEL = "__ack__"
+
+
+def _split_ctrl_ack_args(args) -> tuple[tuple, str | None, int | None]:
+    """Separate normal /ctrl args from bridge ACK metadata.
+
+    The bridge appends: __ack__ <cmd_id> <ack_port>. Older senders that do
+    not include this trailer continue to work as before.
+    """
+    vals = tuple(args)
+    if len(vals) >= 3 and vals[-3] == _ACK_SENTINEL:
+        try:
+            return vals[:-3], str(vals[-2]), int(vals[-1])
+        except (TypeError, ValueError):
+            return vals[:-3], str(vals[-2]), None
+    return vals, None, None
+
+
+def _send_ctrl_ack(client_addr, command: str, ack_id: str | None,
+                   ack_port: int | None, ok: bool = True,
+                   message: str = "ok"):
+    if not ack_id or not ack_port or not client_addr:
+        return
+    try:
+        from pythonosc.udp_client import SimpleUDPClient
+        client = SimpleUDPClient(client_addr[0], int(ack_port))
+        client.send_message(f"{DEV_PFX}/ack",
+                            [command, ack_id, 1 if ok else 0, message])
+    except Exception as e:
+        print(f"[ACK] {command} {ack_id}: {e}", file=sys.stderr)
+
+
+def _handle_ctrl_command(client_addr, addr: str, command: str, action, *args):
+    normal_args, ack_id, ack_port = _split_ctrl_ack_args(args)
+    ok = True
+    message = "ok"
+    try:
+        action(client_addr, addr, *normal_args)
+    except Exception as e:
+        ok = False
+        message = str(e)
+        print(f"[CTRL] /ctrl/{command}: {e}", file=sys.stderr)
+    finally:
+        _send_ctrl_ack(client_addr, command, ack_id, ack_port, ok, message)
+
+
 def _osc_send(vad_speech: int, feature_means: dict, emo_scores: dict):
     if not _osc_on or _osc_client is None:
         return
@@ -925,26 +971,30 @@ def _start_ctrl_listener():
         return
 
     disp = Dispatcher()
+    def map_ctrl(command: str, action):
+        disp.map(f"/ctrl/{command}",
+                 lambda client, addr, *a: _handle_ctrl_command(
+                     client, addr, command, action, *a),
+                 needs_reply_address=True)
+
     # /ctrl/osc_start auto-routes the OSC stream back to whoever sent the
     # CTRL packet (the bridge). With needs_reply_address=True python-osc
     # passes (client_addr_tuple, osc_addr, *args) to the handler. This
     # eliminates any need to pre-configure the Mac's IP on the Pi.
-    disp.map("/ctrl/osc_start",
-             lambda client, addr, *a: osc_start(ip=client[0]),
-             needs_reply_address=True)
-    disp.map("/ctrl/osc_stop", lambda addr, *a: osc_stop())
-    disp.map("/ctrl/log_start", _ctrl_log_start)
-    disp.map("/ctrl/log_pause", lambda addr, *a: log_pause())
-    disp.map("/ctrl/log_resume", lambda addr, *a: log_resume())
-    disp.map("/ctrl/log_stop", lambda addr, *a: log_stop())
-    disp.map("/ctrl/query_state", lambda addr, *a: _emit_state())
+    map_ctrl("osc_start", lambda client, addr, *a: osc_start(ip=client[0]))
+    map_ctrl("osc_stop", lambda client, addr, *a: osc_stop())
+    map_ctrl("log_start", lambda client, addr, *a: _ctrl_log_start(addr, *a))
+    map_ctrl("log_pause", lambda client, addr, *a: log_pause())
+    map_ctrl("log_resume", lambda client, addr, *a: log_resume())
+    map_ctrl("log_stop", lambda client, addr, *a: log_stop())
+    map_ctrl("query_state", lambda client, addr, *a: _emit_state())
     # Per-stage processing toggles
-    disp.map("/ctrl/vad_on",       lambda addr, *a: _set_proc(_proc_vad,      "VAD",     True))
-    disp.map("/ctrl/vad_off",      lambda addr, *a: _set_proc(_proc_vad,      "VAD",     False))
-    disp.map("/ctrl/emotion_on",   lambda addr, *a: _set_emotion_proc(True))
-    disp.map("/ctrl/emotion_off",  lambda addr, *a: _set_emotion_proc(False))
-    disp.map("/ctrl/prosody_on",   lambda addr, *a: _set_proc(_proc_prosody,  "PROSODY", True))
-    disp.map("/ctrl/prosody_off",  lambda addr, *a: _set_proc(_proc_prosody,  "PROSODY", False))
+    map_ctrl("vad_on",      lambda client, addr, *a: _set_proc(_proc_vad,     "VAD",     True))
+    map_ctrl("vad_off",     lambda client, addr, *a: _set_proc(_proc_vad,     "VAD",     False))
+    map_ctrl("emotion_on",  lambda client, addr, *a: _set_emotion_proc(True))
+    map_ctrl("emotion_off", lambda client, addr, *a: _set_emotion_proc(False))
+    map_ctrl("prosody_on",  lambda client, addr, *a: _set_proc(_proc_prosody, "PROSODY", True))
+    map_ctrl("prosody_off", lambda client, addr, *a: _set_proc(_proc_prosody, "PROSODY", False))
 
     try:
         server = BlockingOSCUDPServer(("0.0.0.0", CTRL_PORT), disp)

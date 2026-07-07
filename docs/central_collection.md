@@ -82,6 +82,16 @@ For example:
 
 This namespace is what lets many Pis and many microphones share one central OSC port.
 
+Control commands have an application-level acknowledgement. When the browser bridge sends a `/ctrl/...` command, it appends a command id and ACK port. The Pi executes the command and replies with:
+
+```text
+/dev/<device_id>/ack <command> <cmd_id> <ok> <message>
+```
+
+The bridge waits `750` ms by default. On a wired Ethernet network this is a conservative timeout: ordinary round trips should be far below it, but the operator sees a warning quickly if a command packet or reply is lost. Set `ACK_TIMEOUT_MS` before starting the bridge if a different threshold is needed.
+
+This ACK layer applies only to control commands. Live telemetry packets such as VAD, prosody, emotion, and self-telemetry remain best-effort UDP streams.
+
 ### 3.1 Browser Receiver Screenshots
 
 The browser receiver is the central visual control surface. These screenshots use simulated OSC data, but the layout is the same when real Pis are broadcasting.

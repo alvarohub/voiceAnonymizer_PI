@@ -23,6 +23,8 @@ const OSC_PORT = parseInt(process.env.OSC_PORT || '9000', 10);
 const WS_PORT = parseInt(process.env.WS_PORT || '8765', 10);
 const HTTP_PORT = parseInt(process.env.HTTP_PORT || '3000', 10);
 const CTRL_PORT_FALLBACK = parseInt(process.env.CTRL_PORT || '9001', 10); // default when registry has no entry
+const ACK_TIMEOUT_MS = parseInt(process.env.ACK_TIMEOUT_MS || '750', 10);
+const ACK_SENTINEL = '__ack__';
 // Fallback CTRL target if no OSC has been received yet (env override or localhost).
 const CTRL_HOST_FALLBACK = process.env.CTRL_HOST || '127.0.0.1';
 
@@ -116,12 +118,38 @@ const clients = new Set();
 // so the existing p5.js sketch (which expects un-prefixed addresses like
 // /speech/F0... and /state/vad_active) keeps working unchanged.
 const wsSelected = new WeakMap(); // ws -> device_id (string) | null
+const pendingAcks = new Map(); // cmd_id -> { cmd, targetId, sentAt, timer }
+let nextCmdSeq = 1;
 
 function oscArg(value) {
   return { type: 's', value: String(value) };
 }
 
-function sendCtrl(targetHost, targetPort, cmd, args = []) {
+function broadcastAckStatus(status) {
+  broadcast({ type: 'ack_status', ...status });
+}
+
+function sendCtrl(targetHost, targetPort, cmd, args = [], targetId = null) {
+  const cmdId = `${Date.now().toString(36)}-${nextCmdSeq++}`;
+  const sentAt = Date.now();
+  const cmdArgs = [...args, ACK_SENTINEL, cmdId, String(OSC_PORT)];
+  const timer = setTimeout(() => {
+    const pending = pendingAcks.get(cmdId);
+    if (!pending) return;
+    pendingAcks.delete(cmdId);
+    broadcastAckStatus({
+      status: 'timeout',
+      cmd,
+      cmd_id: cmdId,
+      target_device: targetId,
+      elapsed_ms: Date.now() - sentAt,
+      timeout_ms: ACK_TIMEOUT_MS,
+      message: 'no ACK received',
+    });
+    console.warn(`[ACK] timeout /ctrl/${cmd} ${cmdId} target=${targetId || `${targetHost}:${targetPort}`}`);
+  }, ACK_TIMEOUT_MS);
+  pendingAcks.set(cmdId, { cmd, targetId, sentAt, timer });
+
   const cmdPort = new osc.UDPPort({
     localAddress: '0.0.0.0',
     localPort: 0,
@@ -131,11 +159,51 @@ function sendCtrl(targetHost, targetPort, cmd, args = []) {
   });
   cmdPort.open();
   cmdPort.on('ready', () => {
-    cmdPort.send({ address: '/ctrl/' + cmd, args: args.map(oscArg) });
+    broadcastAckStatus({
+      status: 'pending',
+      cmd,
+      cmd_id: cmdId,
+      target_device: targetId,
+      timeout_ms: ACK_TIMEOUT_MS,
+      message: 'waiting for ACK',
+    });
+    cmdPort.send({ address: '/ctrl/' + cmd, args: cmdArgs.map(oscArg) });
     const suffix = args.length ? ` ${JSON.stringify(args)}` : '';
-    console.log(`[CTRL] → /ctrl/${cmd}${suffix} → ${targetHost}:${targetPort}`);
+    console.log(`[CTRL] → /ctrl/${cmd}${suffix} ack=${cmdId} → ${targetHost}:${targetPort}`);
     setTimeout(() => cmdPort.close(), 100);
   });
+}
+
+function handleCommandAck(deviceId, args) {
+  const [cmd, cmdId, okRaw, message] = args;
+  if (!cmdId) return false;
+  const pending = pendingAcks.get(String(cmdId));
+  if (!pending) {
+    broadcastAckStatus({
+      status: 'late',
+      cmd: cmd || '?',
+      cmd_id: String(cmdId),
+      target_device: deviceId,
+      message: message || 'ACK arrived after timeout or for unknown command',
+    });
+    console.warn(`[ACK] late/unknown ${cmd || '?'} ${cmdId} from ${deviceId || '?'}`);
+    return true;
+  }
+  clearTimeout(pending.timer);
+  pendingAcks.delete(String(cmdId));
+  const ok = okRaw === true || okRaw === 1 || okRaw === '1' || String(okRaw).toLowerCase() === 'true';
+  const elapsedMs = Date.now() - pending.sentAt;
+  broadcastAckStatus({
+    status: ok ? 'ok' : 'error',
+    cmd: cmd || pending.cmd,
+    cmd_id: String(cmdId),
+    target_device: deviceId || pending.targetId,
+    elapsed_ms: elapsedMs,
+    timeout_ms: ACK_TIMEOUT_MS,
+    message: message || (ok ? 'ACK received' : 'command failed'),
+  });
+  console.log(`[ACK] ${ok ? 'ok' : 'error'} /ctrl/${cmd || pending.cmd} ${cmdId} ${elapsedMs}ms from ${deviceId || '?'}`);
+  return true;
 }
 
 wss.on('connection', (ws) => {
@@ -175,7 +243,7 @@ wss.on('connection', (ws) => {
           const startMs = String(Date.now());
           cmdArgs = [startMs, new Date(Number(startMs)).toISOString()];
         }
-        sendCtrl(host, port, msg.cmd, cmdArgs);
+        sendCtrl(host, port, msg.cmd, cmdArgs, targetId);
       }
     } catch (_) {}
   });
@@ -262,6 +330,11 @@ udpPort.on('message', (oscMsg, timeTag, info) => {
     strippedAddr = m[2]; // e.g. /speech/F0... or /state/vad_active
   }
 
+  if (strippedAddr === '/ack') {
+    handleCommandAck(msgDeviceId, args);
+    return;
+  }
+
   // Forward to each WS client, filtered by their selected device.
   // Clients with no selection see only legacy (un-namespaced) messages
   // until they pick one — keeps the UI quiet when many devices are present.
@@ -296,4 +369,4 @@ udpPort.on('error', (err) => {
 
 udpPort.open();
 console.log(`[OSC] listening on UDP :${OSC_PORT}`);
-console.log('Ready. Open http://localhost:3000 in your browser.');
+console.log(`Ready. Open http://localhost:${HTTP_PORT} in your browser.`);

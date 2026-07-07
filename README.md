@@ -24,8 +24,8 @@ Operator install and run:
 USB preparer only:
 
 - [3. USB Preparer Path: Build The Offline Bundle](#3-usb-preparer-path-build-the-offline-bundle)
-- [13. USB Preparation Details: Offline Python Dependencies](#13-usb-preparation-details-offline-python-dependencies)
-- [14. USB Preparation Details: VAD And openSMILE](#14-usb-preparation-details-vad-and-opensmile)
+- [14. USB Preparation Details: Offline Python Dependencies](#14-usb-preparation-details-offline-python-dependencies)
+- [15. USB Preparation Details: VAD And openSMILE](#15-usb-preparation-details-vad-and-opensmile)
 
 Reference and troubleshooting:
 
@@ -37,10 +37,11 @@ Reference and troubleshooting:
 - [PDF copy of this README](docs/pdf/README.pdf)
 - [PDF copy of the central collection guide](docs/pdf/central_collection.pdf)
 - [11. Control Commands](#11-control-commands)
-- [12. Emotion Models](#12-emotion-models)
-- [15. Raspberry Pi Setup Reference](#15-raspberry-pi-setup-reference)
-- [16. Diagnostics](#16-diagnostics)
-- [17. Git Notes](#17-git-notes)
+- [12. Critical System Aspects](#12-critical-system-aspects)
+- [13. Emotion Models](#13-emotion-models)
+- [16. Raspberry Pi Setup Reference](#16-raspberry-pi-setup-reference)
+- [17. Diagnostics](#17-diagnostics)
+- [18. Git Notes](#18-git-notes)
 
 ## 1. What Runs Where
 
@@ -517,7 +518,25 @@ Command delivery has an application-level acknowledgement when commands are sent
 
 Live telemetry packets such as VAD, prosody, emotion, and rate updates remain best-effort UDP. The ACK mechanism is only for operator/control commands.
 
-## 12. Emotion Models
+## 12. Critical System Aspects
+
+This system is designed so the operator can recover useful data even if one part of the live network workflow is imperfect.
+
+| Aspect | What matters operationally |
+| ------ | -------------------------- |
+| Command timing | Use scheduled starts for synchronized recording: `python3 broadcast_ctrl.py log_start --expected 12 --timeout 10 --delay-s 2`. The command is sent first, then each Pi starts logging at the requested future timestamp. This is better than asking every Pi to start immediately as packets arrive. |
+| Command ACKs | Control commands use application-level ACKs. The sender waits `150` ms by default, which should be comfortably above normal wired-Ethernet round-trip time. If a Pi is busy or the network is slower, use `--ack-timeout-ms 250` or set `ACK_TIMEOUT_MS=250` before `./run_web.sh`. |
+| Live telemetry | OSC telemetry is UDP best-effort. Missing one VAD/prosody/emotion packet should not stop the session. The browser display is a live monitor, not the only record of the run. |
+| Local logging fallback | Pi-side CSV logging is the most important fallback. If the central browser, WebSocket bridge, or central collector stops, each Pi can still keep writing its local `output/` files once logging has started. Copy them later with `gather_logs.sh` or from the SD card. |
+| Central collection | `osc_collector.py` is useful for a central long-format CSV stream, but it is not required for Pi-local logging. It listens on the same default OSC port as the browser bridge, so do not run both on UDP `9000` unless one of them is moved to another port. |
+| Status reports | Use `python3 broadcast_ctrl.py status --expected 12 --timeout 10` before a run. It asks every discovered mic process whether OSC/logging/VAD/emotion/prosody are active and reports the ACK message per device. |
+| Emotion fallback | Emotion inference is optional. If the model is missing or disabled, VAD, prosody, OSC, and CSV logging can still run. The operator should not stop a session only because emotion is unavailable. |
+| Offline install fallback | The prepared USB bundle must contain `models/` and `wheelhouse/`. If `install_from_bundle.sh` reports missing apt packages, the Pi image was not fully prepared for offline use; connect once to install system packages or rebuild the SD image. |
+| Time alignment | CSV rows include absolute Unix milliseconds and ISO timestamps. Use those fields to align data copied from different Pis after a run, especially when logs are recovered from SD cards instead of the central collector. |
+
+The safest pre-run sequence is: power/network the Pis, confirm `/hello` discovery with `broadcast_ctrl.py --list`, run `broadcast_ctrl.py status`, start logging with a short future delay, then watch the browser receiver as a monitor.
+
+## 13. Emotion Models
 
 Emotion inference is optional. The rest of the pipeline can still run without loading an emotion model.
 
@@ -586,7 +605,7 @@ The expected project-local path for the base model is:
 models/iic/emotion2vec_plus_base/model.pt
 ```
 
-## 13. USB Preparation Details: Offline Python Dependencies
+## 14. USB Preparation Details: Offline Python Dependencies
 
 This section explains why the prepared bundle uses `wheelhouse/`. For the actual USB preparation checklist, use section 3. The operator does not need this section.
 
@@ -612,7 +631,7 @@ These are still normal Python packages. The difference is that `pip` installs th
 
 This covers Python packages only. For a completely offline Pi, system packages from apt (`portaudio19-dev`, `libsndfile1`, `ffmpeg`, and related packages) must already be installed, or the Pi image must be prepared in advance. `install_from_bundle.sh` checks for these packages before it tries to install the Python venv.
 
-## 14. USB Preparation Details: VAD And openSMILE
+## 15. USB Preparation Details: VAD And openSMILE
 
 This section explains what the USB preparer should include. The operator does not need to run these copy commands if the USB drive is already prepared.
 
@@ -634,7 +653,7 @@ The important file inside that folder is `hubconf.py`; the actual VAD weights ar
 
 openSMILE is different: it is not a separate model folder. It is installed as the Python package `opensmile` by `bash setup_pi.sh` from `requirements-pi.txt`. After installation, it lives inside the Pi's `venv/` along with the other Python dependencies.
 
-## 15. Raspberry Pi Setup Reference
+## 16. Raspberry Pi Setup Reference
 
 This is a reference for developer/preparer installs from GitHub or for repairing a Pi manually. Operators using a prepared USB bundle should use section 2 instead. Use Raspberry Pi OS 64-bit on a Pi 4 or Pi 5. Use at least 8 GB RAM when loading the larger emotion model.
 
@@ -703,7 +722,7 @@ source venv/bin/activate
 
 The setup script is safe to run again. It will reuse the existing `venv/` and update/install missing Python packages.
 
-## 16. Diagnostics
+## 17. Diagnostics
 
 Run diagnostics on the Pi before a live session if microphone setup is uncertain.
 
@@ -728,7 +747,7 @@ If diagnostics pass but the browser receiver shows no data, check these items in
 - The Pi and central computer are on the same network.
 - OSC streaming has been enabled from the browser UI or with `/ctrl/osc_start`.
 
-## 17. Git Notes
+## 18. Git Notes
 
 Only source files, scripts, examples, and documentation are tracked by Git. Runtime and machine-specific files are intentionally left local.
 

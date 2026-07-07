@@ -7,6 +7,7 @@ This document explains what the central computer receives, what gets written to 
 - [1. Quick Summary](#1-quick-summary)
 - [2. System Roles](#2-system-roles)
 - [3. Discovery And OSC Routing](#3-discovery-and-osc-routing)
+  - [3.1 Browser Receiver Screenshots](#31-browser-receiver-screenshots)
 - [4. CSV Outputs](#4-csv-outputs)
   - [4.1 Central OSC Collector CSV](#41-central-osc-collector-csv)
   - [4.2 Pi-Local Analysis CSV](#42-pi-local-analysis-csv)
@@ -80,6 +81,14 @@ For example:
 ```
 
 This namespace is what lets many Pis and many microphones share one central OSC port.
+
+### 3.1 Browser Receiver Screenshots
+
+The browser receiver is the central visual control surface. These screenshots use simulated OSC data, but the layout is the same when real Pis are broadcasting.
+
+![Central receiver live view](images/central-receiver-live.png)
+
+![Central receiver compact view](images/central-receiver-compact.png)
 
 ## 4. CSV Outputs
 

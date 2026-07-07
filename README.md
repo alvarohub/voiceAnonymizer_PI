@@ -113,8 +113,11 @@ cd ~/SPEECH_RECORD_ANALYSIS
 5. Run the prepared-bundle installer:
 
 ```bash
-./install_from_bundle.sh
+chmod +x *.sh
+bash install_from_bundle.sh
 ```
+
+The `chmod` line restores script execute permissions in case the USB drive or graphical copy removed them. Running the installer with `bash` also works even if the script itself is not marked executable.
 
 6. Activate the Python environment:
 
@@ -202,7 +205,8 @@ cp -a ~/SPEECH_RECORD_ANALYSIS/wheelhouse /media/$USER/INSTALL_DRIVE/SPEECH_RECO
 
 ```bash
 cd ~/SPEECH_RECORD_ANALYSIS
-./install_from_bundle.sh
+chmod +x *.sh
+bash install_from_bundle.sh
 ```
 
 Replace `INSTALL_DRIVE` with the name printed by `ls /media/$USER` on that Pi. After step 3, the USB folder is the complete prepared bundle for the other Pis.

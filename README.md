@@ -85,13 +85,23 @@ Install on each Pi:
 ls /media/$USER
 ```
 
+The names printed there are the mounted drives. If more than one appears, look for the one that contains the prepared project folder:
+
+```bash
+ls /media/$USER/<drive-name>
+```
+
+The right drive should show `SPEECH_RECORD_ANALYSIS`. You can also run `lsblk -f` to see the USB drive label, size, and mount point. In the examples below, replace `INSTALL_DRIVE` with the exact folder name shown under `/media/$USER`.
+
 4. Copy the prepared folder from the USB drive to the Pi. The recommended destination is the Pi user's home folder:
 
 ```text
 /home/<pi-user>/SPEECH_RECORD_ANALYSIS
 ```
 
-In shell commands this is written as `~/SPEECH_RECORD_ANALYSIS`. Keeping the project in the user's home folder is convenient because the Pi user can write local config files, logs, model cache files, and the Python `venv/` there without special permissions.
+In shell commands this is written as `~/SPEECH_RECORD_ANALYSIS`. In the Raspberry Pi graphical file manager, open the user's **Home** folder and drop the whole `SPEECH_RECORD_ANALYSIS` folder there, so it appears next to folders such as `Desktop`, `Documents`, and `Downloads`. Do not drop it inside `Desktop`, `Documents`, or `Downloads` unless you also adjust the terminal commands later.
+
+Keeping the project in the user's home folder is convenient because the Pi user can write local config files, logs, model cache files, and the Python `venv/` there without special permissions.
 
 This example assumes the drive name is `INSTALL_DRIVE`:
 

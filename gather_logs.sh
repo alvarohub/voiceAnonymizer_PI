@@ -7,19 +7,19 @@ Usage:
   ./gather_logs.sh [options] [destination_dir] [host1 host2 ...]
 
 Options:
-  --remote-path PATH   Remote output path relative to the Pi user's home.
-                       Default: SPEECH_RECORD_ANALYSIS/output/
+  --remote-path PATH   Remote log-data path relative to the Pi user's home.
+                       Default: SPEECH_RECORD_ANALYSIS/log_data/
   --remove-source      Remove remote files after successful transfer.
   -h, --help           Show this help.
 
 Examples:
   ./gather_logs.sh
-  ./gather_logs.sh output/session_20260524
-  ./gather_logs.sh --remove-source output/session_20260524 emotionpi1 emotionpi2
+  ./gather_logs.sh log_data/session_20260524
+  ./gather_logs.sh --remove-source log_data/session_20260524 emotionpi1 emotionpi2
 EOF
 }
 
-REMOTE_PATH="SPEECH_RECORD_ANALYSIS/output/"
+REMOTE_PATH="SPEECH_RECORD_ANALYSIS/log_data/"
 REMOVE_SOURCE=0
 
 while (($# > 0)); do
@@ -51,8 +51,8 @@ while (($# > 0)); do
   esac
 done
 
-DEST_ROOT="output/gathered/$(date +%Y%m%d_%H%M%S)"
-if (($# > 0)) && [[ "$1" == */* || "$1" == output* || "$1" == .* ]]; then
+DEST_ROOT="log_data/gathered/$(date +%Y%m%d_%H%M%S)"
+if (($# > 0)) && [[ "$1" == */* || "$1" == log_data* || "$1" == .* ]]; then
   DEST_ROOT="$1"
   shift
 fi

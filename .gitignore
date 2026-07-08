@@ -2,10 +2,6 @@
 venv/
 .venv/
 
-# Local per-Pi microphone configs
-config_mic1.yaml
-config_mic2.yaml
-
 # Project-local model cache (~1 GB+ per model — ship via USB, not git)
 # Track the folder via its README.md, but ignore everything else.
 models/*
@@ -19,6 +15,7 @@ wheelhouse/
 .wheelhouse-venv/
 
 # Runtime output
+log_data/
 output/
 logs/
 *.csv

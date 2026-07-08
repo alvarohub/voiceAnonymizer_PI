@@ -24,12 +24,64 @@ const WS_PORT = parseInt(process.env.WS_PORT || '8765', 10);
 const HTTP_PORT = parseInt(process.env.HTTP_PORT || '3000', 10);
 const CTRL_PORT_FALLBACK = parseInt(process.env.CTRL_PORT || '9001', 10); // default when registry has no entry
 const ACK_TIMEOUT_MS = parseInt(process.env.ACK_TIMEOUT_MS || '150', 10);
+const EXPECTED_TARGETS_JSON = process.env.EXPECTED_TARGETS_JSON || '';
 const ACK_SENTINEL = '__ack__';
 // Fallback CTRL target if no OSC has been received yet (env override or localhost).
 const CTRL_HOST_FALLBACK = process.env.CTRL_HOST || '127.0.0.1';
 
 // Last sender of incoming OSC; used only as a last-ditch fallback for CTRL routing.
 let lastSenderAddress = null;
+
+function endpointKey(ip, ctrlPort) {
+  return `${ip}:${ctrlPort}`;
+}
+
+function loadExpectedTargets(raw) {
+  const expectedByDevice = new Map();
+  const expectedByEndpoint = new Map();
+  if (!raw) {
+    return { expectedByDevice, expectedByEndpoint };
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    console.error(`[EXPECT] invalid EXPECTED_TARGETS_JSON: ${err.message}`);
+    return { expectedByDevice, expectedByEndpoint };
+  }
+  if (!Array.isArray(parsed)) {
+    console.error('[EXPECT] EXPECTED_TARGETS_JSON must be a JSON array');
+    return { expectedByDevice, expectedByEndpoint };
+  }
+
+  for (let i = 0; i < parsed.length; i += 1) {
+    const item = parsed[i];
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+    const ip = String(item.ip || item.addr || '').trim();
+    if (!ip) {
+      console.warn(`[EXPECT] skipping target ${i + 1}: missing ip`);
+      continue;
+    }
+    const ctrl_port = parseInt(item.ctrl_port || CTRL_PORT_FALLBACK, 10) || CTRL_PORT_FALLBACK;
+    const mic_id = String(item.mic_id ?? item.mic ?? item.id ?? '?');
+    const pi_id = String(item.pi_id || item.hostname || ip);
+    const hostname = String(item.hostname || pi_id);
+    const device_id = String(item.device_id || `${pi_id}-${mic_id}`);
+    const target = { device_id, pi_id, mic_id, hostname, ip, ctrl_port };
+    expectedByDevice.set(device_id, target);
+    expectedByEndpoint.set(endpointKey(ip, ctrl_port), target);
+  }
+
+  if (expectedByDevice.size > 0) {
+    console.log(`[EXPECT] loaded ${expectedByDevice.size} expected process target(s) from session YAML`);
+  }
+  return { expectedByDevice, expectedByEndpoint };
+}
+
+const { expectedByDevice, expectedByEndpoint } = loadExpectedTargets(EXPECTED_TARGETS_JSON);
 
 // ── Device registry (populated by /hello v2 broadcasts) ──────────
 // device_id -> { ip, ctrl_port, pi_id, mic_id, hostname, version, lastSeen }
@@ -40,16 +92,78 @@ const DEV_TTL_MS = 8000; // drop a device if no /hello for this long
 
 function deviceListSnapshot() {
   const now = Date.now();
-  return Array.from(devices.entries()).map(([device_id, d]) => ({
-    device_id,
-    pi_id: d.pi_id,
-    mic_id: d.mic_id,
-    addr: d.ip,
-    ctrl_port: d.ctrl_port,
-    hostname: d.hostname,
-    version: d.version,
-    ageMs: now - d.lastSeen,
-  }));
+  const rows = [];
+  const seenLiveIds = new Set();
+
+  for (const expected of expectedByDevice.values()) {
+    let liveId = expected.device_id && devices.has(expected.device_id) ? expected.device_id : null;
+    let live = liveId ? devices.get(liveId) : null;
+
+    if (!live) {
+      const byEndpoint = expectedByEndpoint.get(endpointKey(expected.ip, expected.ctrl_port));
+      if (byEndpoint) {
+        for (const [id, d] of devices.entries()) {
+          if (d.ip === byEndpoint.ip && (d.ctrl_port || CTRL_PORT_FALLBACK) === byEndpoint.ctrl_port) {
+            liveId = id;
+            live = d;
+            break;
+          }
+        }
+      }
+    }
+
+    const ageMs = live ? now - live.lastSeen : DEV_TTL_MS + 1;
+    const connected = ageMs <= DEV_TTL_MS;
+    if (liveId) seenLiveIds.add(liveId);
+    rows.push({
+      device_id: expected.device_id,
+      pi_id: expected.pi_id,
+      mic_id: expected.mic_id,
+      addr: expected.ip,
+      ctrl_port: expected.ctrl_port,
+      hostname: expected.hostname,
+      version: live?.version || '?',
+      ageMs,
+      connected,
+      expected: true,
+      audio_ok: connected ? live?.audio_ok : null,
+      audio_device: connected ? live?.audio_device : '',
+      audio_error: connected ? live?.audio_error : 'no heartbeat',
+      lastStateAt: connected ? live?.lastStateAt : null,
+      heartbeat_device_id: liveId || null,
+    });
+  }
+
+  for (const [device_id, d] of devices.entries()) {
+    if (seenLiveIds.has(device_id)) continue;
+    const ageMs = now - d.lastSeen;
+    rows.push({
+      device_id,
+      pi_id: d.pi_id,
+      mic_id: d.mic_id,
+      addr: d.ip,
+      ctrl_port: d.ctrl_port,
+      hostname: d.hostname,
+      version: d.version,
+      ageMs,
+      connected: ageMs <= DEV_TTL_MS,
+      expected: false,
+      audio_ok: d.audio_ok,
+      audio_device: d.audio_device,
+      audio_error: d.audio_error,
+      lastStateAt: d.lastStateAt,
+      heartbeat_device_id: device_id,
+    });
+  }
+
+  rows.sort((a, b) => {
+    const piCmp = String(a.pi_id || '').localeCompare(String(b.pi_id || ''), undefined, { numeric: true });
+    if (piCmp !== 0) return piCmp;
+    const micCmp = String(a.mic_id || '').localeCompare(String(b.mic_id || ''), undefined, { numeric: true });
+    if (micCmp !== 0) return micCmp;
+    return String(a.device_id || '').localeCompare(String(b.device_id || ''), undefined, { numeric: true });
+  });
+  return rows;
 }
 // Back-compat alias for any older browser code expecting piListSnapshot().
 const piListSnapshot = deviceListSnapshot;
@@ -82,6 +196,19 @@ const MIME = {
 
 const httpServer = http.createServer((req, res) => {
   let filePath = req.url === '/' ? '/index.html' : req.url;
+  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+
+  if (url.pathname === '/api/devices') {
+    const body = JSON.stringify({ devices: deviceListSnapshot() }, null, 2);
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+    });
+    res.end(body);
+    return;
+  }
+
+  filePath = url.pathname === '/' ? '/index.html' : url.pathname;
   filePath = path.join(__dirname, filePath);
   const ext = path.extname(filePath);
   const contentType = MIME[ext] || 'application/octet-stream';
@@ -133,6 +260,7 @@ function sendCtrl(targetHost, targetPort, cmd, args = [], targetId = null) {
   const cmdId = `${Date.now().toString(36)}-${nextCmdSeq++}`;
   const sentAt = Date.now();
   const cmdArgs = [...args, ACK_SENTINEL, cmdId, String(OSC_PORT)];
+  const oscLine = `/ctrl/${cmd}${args.length ? ` ${args.map((a) => JSON.stringify(String(a))).join(' ')}` : ''}`;
   const timer = setTimeout(() => {
     const pending = pendingAcks.get(cmdId);
     if (!pending) return;
@@ -142,13 +270,14 @@ function sendCtrl(targetHost, targetPort, cmd, args = [], targetId = null) {
       cmd,
       cmd_id: cmdId,
       target_device: targetId,
+      osc_line: pending.oscLine,
       elapsed_ms: Date.now() - sentAt,
       timeout_ms: ACK_TIMEOUT_MS,
       message: 'no ACK received',
     });
     console.warn(`[ACK] timeout /ctrl/${cmd} ${cmdId} target=${targetId || `${targetHost}:${targetPort}`}`);
   }, ACK_TIMEOUT_MS);
-  pendingAcks.set(cmdId, { cmd, targetId, sentAt, timer });
+  pendingAcks.set(cmdId, { cmd, targetId, sentAt, timer, oscLine });
 
   const cmdPort = new osc.UDPPort({
     localAddress: '0.0.0.0',
@@ -164,6 +293,7 @@ function sendCtrl(targetHost, targetPort, cmd, args = [], targetId = null) {
       cmd,
       cmd_id: cmdId,
       target_device: targetId,
+      osc_line: oscLine,
       timeout_ms: ACK_TIMEOUT_MS,
       message: 'waiting for ACK',
     });
@@ -172,6 +302,22 @@ function sendCtrl(targetHost, targetPort, cmd, args = [], targetId = null) {
     console.log(`[CTRL] → /ctrl/${cmd}${suffix} ack=${cmdId} → ${targetHost}:${targetPort}`);
     setTimeout(() => cmdPort.close(), 100);
   });
+}
+
+function broadcastTargets() {
+  const now = Date.now();
+  return Array.from(devices.entries())
+    .filter(([, d]) => now - d.lastSeen <= DEV_TTL_MS && d.audio_ok === true)
+    .map(([device_id, d]) => ({ device_id, host: d.ip, port: d.ctrl_port || CTRL_PORT_FALLBACK }));
+}
+
+function deviceScopedSaveArgs(cmd, args, deviceId) {
+  if (cmd !== 'log_save_stop' || args.length === 0 || !args[0]) return args;
+  const original = String(args[0]);
+  const safeId = String(deviceId || 'device').replace(/[^A-Za-z0-9_.-]/g, '_');
+  const dot = original.toLowerCase().endsWith('.csv') ? original.length - 4 : original.length;
+  const scopedName = `${original.slice(0, dot)}_${safeId}.csv`;
+  return [scopedName, ...args.slice(1)];
 }
 
 function handleCommandAck(deviceId, args) {
@@ -198,11 +344,14 @@ function handleCommandAck(deviceId, args) {
     cmd: cmd || pending.cmd,
     cmd_id: String(cmdId),
     target_device: deviceId || pending.targetId,
+    osc_line: pending.oscLine,
     elapsed_ms: elapsedMs,
     timeout_ms: ACK_TIMEOUT_MS,
     message: message || (ok ? 'ACK received' : 'command failed'),
   });
-  console.log(`[ACK] ${ok ? 'ok' : 'error'} /ctrl/${cmd || pending.cmd} ${cmdId} ${elapsedMs}ms from ${deviceId || '?'}`);
+  console.log(
+    `[ACK] ${ok ? 'ok' : 'error'} /ctrl/${cmd || pending.cmd} ${cmdId} ${elapsedMs}ms from ${deviceId || '?'}`,
+  );
   return true;
 }
 
@@ -227,21 +376,42 @@ wss.on('connection', (ws) => {
       }
 
       if (msg.type === 'cmd' && msg.cmd) {
+        let cmdArgs = Array.isArray(msg.args) ? [...msg.args] : [];
+        if (msg.cmd === 'log_start' && cmdArgs.length === 0) {
+          const startMs = String(Date.now());
+          cmdArgs = [startMs, new Date(Number(startMs)).toISOString()];
+        }
+        if (msg.broadcast) {
+          const targets = broadcastTargets();
+          if (targets.length === 0) {
+            broadcastAckStatus({
+              status: 'error',
+              cmd: msg.cmd,
+              target_device: 'broadcast',
+              message: 'no online audio-ok devices for broadcast',
+            });
+            return;
+          }
+          console.log(`[CTRL] broadcast /ctrl/${msg.cmd} to ${targets.length} audio-ok device(s)`);
+          for (const t of targets)
+            sendCtrl(t.host, t.port, msg.cmd, deviceScopedSaveArgs(msg.cmd, cmdArgs, t.device_id), t.device_id);
+          return;
+        }
+
         // Resolve target: explicit target_device > selected device > legacy fallback.
         const targetId = msg.target_device || wsSelected.get(ws) || null;
         let host = CTRL_HOST_FALLBACK;
         let port = CTRL_PORT_FALLBACK;
-        let cmdArgs = Array.isArray(msg.args) ? [...msg.args] : [];
         if (targetId && devices.has(targetId)) {
           const d = devices.get(targetId);
           host = d.ip;
           port = d.ctrl_port || CTRL_PORT_FALLBACK;
+        } else if (targetId && expectedByDevice.has(targetId)) {
+          const expected = expectedByDevice.get(targetId);
+          host = expected.ip;
+          port = expected.ctrl_port || CTRL_PORT_FALLBACK;
         } else if (lastSenderAddress) {
           host = lastSenderAddress;
-        }
-        if (msg.cmd === 'log_start' && cmdArgs.length === 0) {
-          const startMs = String(Date.now());
-          cmdArgs = [startMs, new Date(Number(startMs)).toISOString()];
         }
         sendCtrl(host, port, msg.cmd, cmdArgs, targetId);
       }
@@ -305,6 +475,7 @@ udpPort.on('message', (oscMsg, timeTag, info) => {
     const prev = devices.get(device_id);
     const isNew = !prev;
     devices.set(device_id, {
+      ...(prev || {}),
       ip: senderIp,
       ctrl_port,
       pi_id,
@@ -328,6 +499,28 @@ udpPort.on('message', (oscMsg, timeTag, info) => {
   if (m) {
     msgDeviceId = m[1];
     strippedAddr = m[2]; // e.g. /speech/F0... or /state/vad_active
+  }
+
+  if (msgDeviceId && strippedAddr.startsWith('/state/audio_')) {
+    const d = devices.get(msgDeviceId);
+    if (d) {
+      let changed = false;
+      if (strippedAddr === '/state/audio_ok') {
+        const v = !!args[0];
+        changed = d.audio_ok !== v;
+        d.audio_ok = v;
+      } else if (strippedAddr === '/state/audio_device') {
+        const v = String(args[0] || '');
+        changed = d.audio_device !== v;
+        d.audio_device = v;
+      } else if (strippedAddr === '/state/audio_error') {
+        const v = String(args[0] || '');
+        changed = d.audio_error !== v;
+        d.audio_error = v;
+      }
+      d.lastStateAt = Date.now();
+      if (changed) broadcastPiList();
+    }
   }
 
   if (strippedAddr === '/ack') {

@@ -270,14 +270,14 @@ def extract_prosody_lld(audio: np.ndarray, sr: int = 16000) -> dict | None:
 _diag_wav_saved = False
 
 def _maybe_save_diag_wav(audio: np.ndarray, sr: int, orig_peak: float) -> None:
-    """Save the first chunk with audible audio to output/diag_lld_chunk.wav."""
+    """Save the first chunk with audible audio to log_data/diag_lld_chunk.wav."""
     global _diag_wav_saved
     if _diag_wav_saved or orig_peak < 0.02:
         return
     _diag_wav_saved = True
     import os, wave, struct
-    path = os.path.join("output", "diag_lld_chunk.wav")
-    os.makedirs("output", exist_ok=True)
+    path = os.path.join("log_data", "diag_lld_chunk.wav")
+    os.makedirs("log_data", exist_ok=True)
     data = (audio * 32767).clip(-32768, 32767).astype(np.int16)
     with wave.open(path, "w") as wf:
         wf.setnchannels(1)

@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Operator-facing install script for a prepared USB/offline bundle.
+# Role: Deployment Phase 3 helper (install on target Pi).
+# Runs on: Each target Raspberry Pi.
+# Called by: deploy_bundle_to_fleet.py, deploy_lab_defaults.sh, or manual command.
 #
 # Use this after copying SPEECH_RECORD_ANALYSIS/ from the USB drive onto the Pi.
 # The bundle is expected to already contain models/ and wheelhouse/.
@@ -79,14 +82,12 @@ echo "==> Prepared bundle looks complete"
 echo "==> Installing system and Python dependencies"
 SKIP_APT=1 WHEELHOUSE_DIR="$SCRIPT_DIR/wheelhouse" bash "$SCRIPT_DIR/setup_pi.sh"
 
-echo "==> Creating local microphone config files if missing"
-if [ ! -f config_mic1.yaml ]; then
-    cp config_mic1.example.yaml config_mic1.yaml
-    echo "Created config_mic1.yaml"
-fi
-if [ ! -f config_mic2.yaml ]; then
-    cp config_mic2.example.yaml config_mic2.yaml
-    echo "Created config_mic2.yaml"
+echo "==> Checking functional microphone config files"
+require_path "config_mic1.yaml" "MIC1 config"
+require_path "config_mic2.yaml" "MIC2 config"
+require_path "config_features.yaml" "feature/log config"
+if [ "$missing" -ne 0 ]; then
+    exit 1
 fi
 
 cat <<'EOF'
@@ -96,8 +97,8 @@ Done.
 Next steps on this Pi:
   1. source venv/bin/activate
   2. python strip_monitor.py --list-devices
-  3. Edit config_mic1.yaml and config_mic2.yaml for this Pi.
-  4. Start one mic:  ./start_audio_server.sh --config config_mic1.yaml
-     Or two mics:   ./start_two_mics.sh
+    3. Confirm config_mic1.yaml and config_mic2.yaml match this Pi.
+  4. Confirm config_features.yaml matches the experiment feature/log plan.
+    5. Start audio processing: ./START_AUDIO_PROCESSING.sh
 
 EOF

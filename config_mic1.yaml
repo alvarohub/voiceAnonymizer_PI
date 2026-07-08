@@ -1,18 +1,10 @@
-# ──────────────────────────────────────────────────
-# TEMPLATE for the Mic 1 instance on a Pi.
-#
-# This file IS tracked in git. The real `config_mic1.yaml` is NOT —
-# it's per-Pi (different audio_device, pi_id) and is in .gitignore.
-#
-# First-time setup on a new Pi:
-#   cp config_mic1.example.yaml config_mic1.yaml
-#   then edit pi_id and audio_device for this Pi's hardware.
-# ──────────────────────────────────────────────────
+# Functional config for the Mic 1 instance on a Pi.
+# The experiment standard is two USB audio devices named MIC1 and MIC2.
 
 # Device identity
-pi_id: null # SET ME — e.g. 5 (null falls back to hostname)
+pi_id: null # null falls back to hostname
 mic_id: 1
-audio_device: null # SET ME — substring of `python3 -m sounddevice` name
+audio_device: 'MIC1'
 ctrl_port: 9001
 
 # Audio
@@ -35,7 +27,7 @@ emo_zero_on_silence: false
 vad_threshold: 0.3
 vad_interval: 0.25
 vad_grab_sec: 0.5
-vad_grid_hz: 100
+# VAD timeline/log grid is experiment-wide: config_features.yaml -> vad.grid_hz
 emo_min_voiced_frac: 0.5
 
 # Logging / streaming (off at launch; toggled remotely)
@@ -43,7 +35,7 @@ log_active: false
 log_interval: 0.25
 osc_active: false
 
-# Display (always off on the Pi — headless)
+# Display (always off on the Pi - headless)
 display: false
 display_n: 200
 display_refresh_ms: 150
@@ -61,4 +53,4 @@ prosody_active: false
 emotion_active: false
 
 # Output
-output_dir: 'output'
+output_dir: 'log_data'

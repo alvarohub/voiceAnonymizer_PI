@@ -1,0 +1,52 @@
+# Experiment-wide feature and log selection.
+#
+# This file is intentionally separate from config_mic*.yaml. The mic configs
+# describe hardware identity and runtime startup state for each Raspberry Pi.
+# This file describes the research data shape that should stay consistent
+# across all microphones in an experiment.
+#
+# The central computer may start/stop logging and turn processing stages on/off,
+# but it does not change these feature selections at runtime.
+
+opensmile:
+  # eGeMAPSv02 LowLevelDescriptors produces the standard 25-column LLD table
+  # with 20 ms windows and a 10 ms hop at 16 kHz.
+  feature_set: eGeMAPSv02
+  feature_level: LowLevelDescriptors
+
+  # Use "all" for the full openSMILE LLD feature table, or replace with a list
+  # of column names to write only selected descriptors.
+  log_features: all
+
+  # OSC/browser visualization can remain a smaller subset even when the CSV
+  # stores the full standard openSMILE table.
+  osc_features:
+    - F0semitoneFrom27.5Hz_sma3nz
+    - Loudness_sma3
+    - jitterLocal_sma3nz
+    - shimmerLocaldB_sma3nz
+    - HNRdBACF_sma3nz
+
+vad:
+  # VAD is logged on the same 100 Hz / 10 ms frame grid as openSMILE.
+  grid_hz: 100
+
+emotion:
+  # Emotion predictions are window-level events, not 100 Hz frame rows.
+  log_scores: true
+
+logs:
+  # Keep the legacy combined CSV for compatibility with the current receiver
+  # and older analysis scripts.
+  combined_csv: true
+
+  # Independent research logs buffered during one session and written only
+  # when the operator saves the log.
+  opensmile_csv: true
+  vad_csv: true
+  emotion_csv: true
+
+  # Filename suffixes appended to the saved base CSV name.
+  opensmile_suffix: opensmile_lld
+  vad_suffix: vad
+  emotion_suffix: emotion

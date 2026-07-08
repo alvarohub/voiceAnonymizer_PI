@@ -6,7 +6,7 @@ Examples:
     python3 broadcast_ctrl.py status --expected 12 --timeout 10
     python3 broadcast_ctrl.py log_start --expected 12 --timeout 10 --delay-s 3
     python3 broadcast_ctrl.py log_start --pi 4 --mic 1
-  python3 broadcast_ctrl.py log_stop --expected 12 --timeout 10
+    python3 broadcast_ctrl.py log_save_stop --expected 12 --timeout 10
   python3 broadcast_ctrl.py emotion_off --pi 3
   python3 broadcast_ctrl.py vad_on --device 2-1 --device 2-2
 
@@ -42,7 +42,10 @@ CTRL_COMMANDS = [
     "log_pause",
     "log_resume",
     "log_stop",
+    "log_save_stop",
+    "log_discard_stop",
     "query_state",
+    "audio_reconnect",
     "vad_on",
     "vad_off",
     "emotion_on",

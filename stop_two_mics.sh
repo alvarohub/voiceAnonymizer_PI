@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stop the two strip_monitor instances launched by start_two_mics.sh.
+# Stop the two strip_monitor instances launched by START_AUDIO_PROCESSING.sh.
 # Sends SIGTERM, then SIGKILL after a 5s grace period.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

@@ -9,7 +9,9 @@ Architecture:
   - Logger thread: configurable rate → CSV + OSC (reads both buffers)
   - Display (FuncAnimation): reads both ring buffers for rendering
 
-All parameters live in config.yaml; CLI args override.
+Hardware/startup parameters live in config.yaml or config_mic*.yaml.
+Experiment feature/logging choices live in config_features.yaml.
+CLI args override selected startup paths and runtime toggles.
 
 Usage:
     conda activate ML311
@@ -47,6 +49,9 @@ def parse_args():
     p = argparse.ArgumentParser(description="Real-time speech analysis")
     p.add_argument("--config", default="config.yaml",
                    help="Path to YAML config file")
+    p.add_argument("--features-config", default="config_features.yaml",
+                   help="Experiment-wide feature/log selection YAML. This is "
+                        "separate from per-mic hardware config.")
     p.add_argument("--no-display", action="store_true",
                    help="Run headless (no matplotlib window)")
     p.add_argument("--no-emotion", action="store_true",
@@ -81,7 +86,7 @@ def parse_args():
                         "pi_id to form device_id like '5-2'.")
     p.add_argument("--device", default=None,
                    help="Input device: integer index OR substring of device name "
-                        "(e.g. 'HK-MIC1'). Use --list-devices to see options. "
+                        "(e.g. 'MIC1'). Use --list-devices to see options. "
                         "Overrides 'audio_device' in config.yaml.")
     p.add_argument("--list-devices", action="store_true",
                    help="List available audio input devices and exit")
@@ -109,7 +114,7 @@ def list_input_devices():
 
 def resolve_device(spec):
     """Resolve a device spec (int, digit-string, or name substring) to an index.
-    Returns None on failure or if spec is None/empty."""
+    Returns None if spec is None/empty; missing named devices raise."""
     if spec is None or spec == "":
         return None
     import sounddevice as sd
@@ -124,6 +129,10 @@ def resolve_device(spec):
     for i, d in enumerate(sd.query_devices()):
         if d["max_input_channels"] > 0 and sl in d["name"].lower():
             return i
+    if spec is not None and str(spec).strip() != "":
+        raise RuntimeError(
+            f"No input device matching '{spec}'. Run: python strip_monitor.py --list-devices"
+        )
     print(f"[WARN] No input device matching '{spec}' — using system default")
     return None
 
@@ -163,7 +172,7 @@ def load_config(args) -> dict:
         self_stats_interval=5.0,  # seconds between /stats/self emissions
         emotion_model="base",
         emotion_load=True,
-        output_dir="output",
+        output_dir="log_data",
         audio_device=None,   # int index, name substring, or null = system default
     )
     for k, v in defaults.items():
@@ -192,6 +201,62 @@ def load_config(args) -> dict:
     return cfg
 
 
+def _deep_update(base: dict, updates: dict) -> dict:
+    """Recursively merge updates into base and return base."""
+    for key, val in (updates or {}).items():
+        if isinstance(val, dict) and isinstance(base.get(key), dict):
+            _deep_update(base[key], val)
+        else:
+            base[key] = val
+    return base
+
+
+def load_feature_config(args) -> dict:
+    """Load experiment-wide feature/logging config.
+
+    This intentionally stays separate from config_mic*.yaml. The mic config
+    controls hardware identity and initial runtime toggles; this file controls
+    the research data shape for all microphones in an experiment.
+    """
+    defaults = {
+        "opensmile": {
+            "feature_set": "eGeMAPSv02",
+            "feature_level": "LowLevelDescriptors",
+            "log_features": "all",
+            "osc_features": [
+                "F0semitoneFrom27.5Hz_sma3nz",
+                "Loudness_sma3",
+                "jitterLocal_sma3nz",
+                "shimmerLocaldB_sma3nz",
+                "HNRdBACF_sma3nz",
+            ],
+        },
+        "vad": {
+            "grid_hz": 100,
+        },
+        "emotion": {
+            "log_scores": True,
+        },
+        "logs": {
+            "combined_csv": True,
+            "opensmile_csv": True,
+            "vad_csv": True,
+            "emotion_csv": True,
+            "opensmile_suffix": "opensmile_lld",
+            "vad_suffix": "vad",
+            "emotion_suffix": "emotion",
+        },
+    }
+    cfg_path = Path(args.features_config)
+    if cfg_path.exists():
+        with open(cfg_path) as f:
+            loaded = yaml.safe_load(f) or {}
+        print(f"[FEATURES] loaded {cfg_path}")
+        return _deep_update(defaults, loaded)
+    print(f"[FEATURES] {cfg_path} not found — using built-in defaults")
+    return defaults
+
+
 ARGS = parse_args()
 
 # Handle --list-devices early (before loading any models)
@@ -200,6 +265,7 @@ if ARGS.list_devices:
     sys.exit(0)
 
 CFG = load_config(ARGS)
+FEATURE_CFG = load_feature_config(ARGS)
 
 # ───────────────────────────────────────────────────────────────────
 # Device identity. Every outgoing OSC address is rooted under
@@ -255,11 +321,37 @@ _emo_hop = [float(CFG["emo_hop"])]
 _vad_threshold = float(CFG["vad_threshold"])
 _vad_interval = [float(CFG["vad_interval"])]
 _vad_grab_sec = [float(CFG["vad_grab_sec"])]
-_vad_grid_hz = [float(CFG["vad_grid_hz"])]
+_vad_grid_hz = [float(FEATURE_CFG.get("vad", {}).get("grid_hz", CFG["vad_grid_hz"]))]
 _emo_min_voiced_frac = [float(CFG["emo_min_voiced_frac"])]
 _log_interval = [float(CFG["log_interval"])]
 _display_n = [int(CFG["display_n"])]
 _display_refresh_ms = int(CFG["display_refresh_ms"])
+
+
+def _research_sync_hz() -> float:
+    return float(_vad_grid_hz[0])
+
+
+def _research_sync_period_ms() -> float:
+    return 1000.0 / max(_research_sync_hz(), 1e-9)
+
+
+def _emotion_hz() -> float:
+    return 1.0 / max(float(_emo_hop[0]), 1e-9)
+
+
+def _osc_send_hz() -> float:
+    return 1.0 / max(float(_log_interval[0]), 1e-9)
+
+
+def _set_osc_send_hz(hz) -> str:
+    requested = float(hz)
+    max_hz = _research_sync_hz()
+    clamped = min(max(requested, 0.5), max_hz)
+    _log_interval[0] = 1.0 / clamped
+    print(f"[OSC] send rate = {clamped:.3g} Hz ({_log_interval[0] * 1000:.1f} ms)")
+    _emit_state()
+    return f"osc_send_hz={clamped:.3g} max={max_hz:.3g}"
 
 # Audio buffer: big enough for max consumer + margin
 def _compute_buf_sec():
@@ -270,14 +362,30 @@ def _compute_buf_sec():
 
 _buf_sec = [_compute_buf_sec()]
 
-# LLD features to extract and stream
-FEATURES = [
-    ("F0semitoneFrom27.5Hz_sma3nz", "F0 (st)",     "cyan",   True,  (0, 50)),
-    ("Loudness_sma3",               "Loudness",     "green",  False, (0, 2.5)),
-    ("jitterLocal_sma3nz",          "Jitter",       "pink",   True,  (0, 0.35)),
-    ("shimmerLocaldB_sma3nz",       "Shimmer (dB)", "orange", True,  (0, 30)),
-    ("HNRdBACF_sma3nz",            "HNR (dB)",     "violet", True,  (0, 15)),
-]
+# LLD features to stream over OSC/display. Independent CSV logging can store
+# the full openSMILE LLD table; this list is only the live visualization subset.
+_FEATURE_META = {
+    "F0semitoneFrom27.5Hz_sma3nz": ("F0 (st)", "cyan", True, (0, 50)),
+    "Loudness_sma3": ("Loudness", "green", False, (0, 2.5)),
+    "jitterLocal_sma3nz": ("Jitter", "pink", True, (0, 0.35)),
+    "shimmerLocaldB_sma3nz": ("Shimmer (dB)", "orange", True, (0, 30)),
+    "HNRdBACF_sma3nz": ("HNR (dB)", "violet", True, (0, 15)),
+}
+
+
+def _build_osc_features() -> list[tuple[str, str, str, bool, tuple[float, float]]]:
+    names = FEATURE_CFG.get("opensmile", {}).get("osc_features") or list(_FEATURE_META)
+    features = []
+    for name in names:
+        label, color, is_nz, ylim = _FEATURE_META.get(
+            name,
+            (name, "white", name.endswith("_sma3nz"), (0, 1)),
+        )
+        features.append((name, label, color, is_nz, ylim))
+    return features
+
+
+FEATURES = _build_osc_features()
 
 EMOTION_DIMS = [
     "angry", "disgusted", "fearful", "happy", "neutral",
@@ -295,31 +403,75 @@ _frame_lock = threading.Lock()
 # Emotion buffer — ~0.5s resolution
 _emo_buf = collections.deque(maxlen=10_000)
 _emo_lock = threading.Lock()
+_emo_seq = [0]
 
 # VAD timeline buffer — independent of prosody. Entries are
-# {"time_s": float, "vad": 0|1} on a fixed grid (default 100 Hz, matching
-# the openSMILE LLD rate so any consumer can align trivially).
+# {"time_s": float, "sample_start": int, "sample_end": int, "vad": 0|1}
+# on a fixed grid (default 100 Hz, matching the openSMILE LLD rate).
 _vad_buf = collections.deque(maxlen=100_000)
 _vad_buf_lock = threading.Lock()
 _last_vad_processed_elapsed = [0.0]
+_last_vad_processed_sample = [-1]
 
 # Tracking for incremental openSMILE (only append new frames)
 _last_processed_elapsed = [0.0]
+_last_processed_sample = [-1]
 
 
 # ═══════════════════════════════════════════════════════════════════
 # 3. AUDIO ACCUMULATOR
 # ═══════════════════════════════════════════════════════════════════
 _audio_lock = threading.Lock()
-_audio_chunks: list[np.ndarray] = []
+_audio_chunks: list[dict] = []
+_audio_total_samples = [0]
+_audio_unix_t0 = [None]  # estimated Unix time of target sample 0
+_audio_overflow_count = [0]
+_audio_last_callback_unix = [0.0]
 # Native input sample rate of the chosen device. Set in main() once the
 # device is opened. Defaults to SR so the callback is correct even if
 # called before main() finishes init.
 _INPUT_SR: int = SR
 
 
+def _clear_stream_buffers() -> None:
+    """Drop rolling data from a closed stream while keeping sample IDs monotonic."""
+    with _audio_lock:
+        _audio_chunks.clear()
+        _audio_unix_t0[0] = None
+    with _frame_lock:
+        _frame_buf.clear()
+    with _vad_buf_lock:
+        _vad_buf.clear()
+    with _emo_lock:
+        _emo_buf.clear()
+
+
+def _trim_audio_locked() -> None:
+    """Trim the rolling audio chunk list while preserving sample indices."""
+    max_samples = int(_buf_sec[0] * SR)
+    cutoff = max(0, _audio_total_samples[0] - max_samples)
+    while _audio_chunks and _audio_chunks[0]["end_sample"] <= cutoff:
+        _audio_chunks.pop(0)
+    if _audio_chunks and _audio_chunks[0]["start_sample"] < cutoff:
+        first = _audio_chunks[0]
+        drop = int(cutoff - first["start_sample"])
+        first["audio"] = first["audio"][drop:].copy()
+        first["start_sample"] = cutoff
+
+
+def _sample_to_unix_ms(sample: int) -> int | None:
+    with _audio_lock:
+        t0 = _audio_unix_t0[0]
+    if t0 is None:
+        return None
+    return int((t0 + (sample / SR)) * 1000)
+
+
 def _audio_callback(indata, frames, time_info, status):
     mono = indata[:, 0]
+    status_text = str(status) if status else ""
+    callback_unix = time.time()
+    _audio_last_callback_unix[0] = callback_unix
     if _INPUT_SR != SR:
         # Resample native_sr -> SR. resample_poly needs integer up/down
         # factors; reduce by gcd so e.g. 48000/16000 -> up=1 down=3.
@@ -329,26 +481,78 @@ def _audio_callback(indata, frames, time_info, status):
     else:
         mono = mono.copy()
     with _audio_lock:
-        _audio_chunks.append(mono)
+        start_sample = _audio_total_samples[0]
+        end_sample = start_sample + len(mono)
+        if _audio_unix_t0[0] is None:
+            try:
+                adc_to_callback = float(time_info.currentTime - time_info.inputBufferAdcTime)
+                first_sample_unix = callback_unix - adc_to_callback
+            except Exception:
+                first_sample_unix = callback_unix
+            _audio_unix_t0[0] = first_sample_unix - (start_sample / SR)
+        if status:
+            print(f"[audio] {status}")
+            if getattr(status, "input_overflow", False):
+                _audio_overflow_count[0] += 1
+        _audio_chunks.append({
+            "audio": mono.astype(np.float32, copy=False),
+            "start_sample": start_sample,
+            "end_sample": end_sample,
+            "adc_time": float(getattr(time_info, "inputBufferAdcTime", 0.0)),
+            "callback_time": float(getattr(time_info, "currentTime", 0.0)),
+            "status": status_text,
+            "overflow_count": int(_audio_overflow_count[0]),
+        })
+        _audio_total_samples[0] = end_sample
+        _trim_audio_locked()
+
+
+def _slice_audio_locked(start_sample: int, end_sample: int) -> np.ndarray:
+    parts = []
+    for chunk in _audio_chunks:
+        c0 = chunk["start_sample"]
+        c1 = chunk["end_sample"]
+        if c1 <= start_sample:
+            continue
+        if c0 >= end_sample:
+            break
+        s0 = max(start_sample, c0) - c0
+        s1 = min(end_sample, c1) - c0
+        parts.append(chunk["audio"][s0:s1])
+    if not parts:
+        return np.zeros(0, dtype=np.float32)
+    if len(parts) == 1:
+        return parts[0].copy()
+    return np.concatenate(parts).astype(np.float32, copy=False)
+
+
+def _get_recent_audio_info(sec: float) -> dict | None:
+    """Return recent audio plus absolute target-sample metadata."""
+    need = int(sec * SR)
+    with _audio_lock:
+        if not _audio_chunks:
+            return None
+        _trim_audio_locked()
+        end_sample = _audio_total_samples[0]
+        start_sample = max(end_sample - need, _audio_chunks[0]["start_sample"])
+        audio = _slice_audio_locked(start_sample, end_sample)
+        overflow_count = int(_audio_overflow_count[0])
+    if len(audio) < int(0.3 * SR):
+        return None
+    return {
+        "audio": audio.astype(np.float32, copy=False),
+        "start_sample": int(start_sample),
+        "end_sample": int(end_sample),
+        "overflow_count": overflow_count,
+    }
 
 
 def _get_recent_audio(sec: float) -> np.ndarray | None:
     """Return last N seconds of audio from the rolling buffer."""
-    with _audio_lock:
-        if not _audio_chunks:
-            return None
-        buf = np.concatenate(_audio_chunks)
-        # Trim buffer to max size
-        max_samples = int(_buf_sec[0] * SR)
-        if len(buf) > max_samples:
-            buf = buf[-max_samples:]
-            _audio_chunks.clear()
-            _audio_chunks.append(buf.copy())
-    need = int(sec * SR)
-    if len(buf) < int(0.3 * SR):
+    info = _get_recent_audio_info(sec)
+    if info is None:
         return None
-    chunk = buf[-need:] if len(buf) >= need else buf
-    return chunk.astype(np.float32)
+    return info["audio"]
 
 
 def _get_full_audio() -> np.ndarray | None:
@@ -356,22 +560,59 @@ def _get_full_audio() -> np.ndarray | None:
     with _audio_lock:
         if not _audio_chunks:
             return None
-        buf = np.concatenate(_audio_chunks)
-        max_samples = int(_buf_sec[0] * SR)
-        if len(buf) > max_samples:
-            buf = buf[-max_samples:]
-            _audio_chunks.clear()
-            _audio_chunks.append(buf.copy())
+        _trim_audio_locked()
+        start_sample = _audio_chunks[0]["start_sample"]
+        end_sample = _audio_total_samples[0]
+        buf = _slice_audio_locked(start_sample, end_sample)
     return buf.astype(np.float32)
 
 
 # ═══════════════════════════════════════════════════════════════════
 # 4. OPENSMILE
 # ═══════════════════════════════════════════════════════════════════
+def _opensmile_feature_set_from_config():
+    name = str(FEATURE_CFG.get("opensmile", {}).get("feature_set", "eGeMAPSv02"))
+    return getattr(opensmile.FeatureSet, name, name)
+
+
+def _opensmile_feature_level_from_config():
+    name = str(FEATURE_CFG.get("opensmile", {}).get("feature_level", "LowLevelDescriptors"))
+    aliases = {
+        "lld": "LowLevelDescriptors",
+        "func": "Functionals",
+        "functionals": "Functionals",
+        "lowleveldescriptors": "LowLevelDescriptors",
+    }
+    attr = aliases.get(name.lower(), name)
+    return getattr(opensmile.FeatureLevel, attr, attr)
+
+
 smile = opensmile.Smile(
-    feature_set=opensmile.FeatureSet.eGeMAPSv02,
-    feature_level=opensmile.FeatureLevel.LowLevelDescriptors,
+    feature_set=_opensmile_feature_set_from_config(),
+    feature_level=_opensmile_feature_level_from_config(),
 )
+
+
+def _opensmile_log_features() -> list[str]:
+    all_features = list(getattr(smile, "feature_names", []))
+    spec = FEATURE_CFG.get("opensmile", {}).get("log_features", "all")
+    if spec is None or spec == "all":
+        return all_features
+    if isinstance(spec, str):
+        spec = [spec]
+    selected = []
+    unknown = []
+    for name in spec:
+        if name in all_features:
+            selected.append(name)
+        else:
+            unknown.append(name)
+    if unknown:
+        print(f"[FEATURES] unknown openSMILE log features ignored: {unknown}")
+    return selected or all_features
+
+
+OPENSMILE_LOG_FEATURES = _opensmile_log_features()
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -406,10 +647,8 @@ def _vad_latest() -> int:
         return int(_vad_buf[-1]["vad"])
 
 
-def _vad_lookup(times: np.ndarray) -> np.ndarray | None:
-    """For each elapsed time in `times`, return the VAD state from the
-    timeline (nearest entry at-or-before). Returns None when VAD is off
-    or the timeline has no entries covering the request."""
+def _vad_lookup_samples(sample_centers: np.ndarray) -> np.ndarray | None:
+    """For each absolute sample center, return VAD state at-or-before it."""
     if not _proc_vad[0]:
         return None
     with _vad_buf_lock:
@@ -419,13 +658,18 @@ def _vad_lookup(times: np.ndarray) -> np.ndarray | None:
         n_take = min(500, n_have)  # ~5s @ 100 Hz is plenty for any chunk
         recent = list(itertools.islice(
             _vad_buf, n_have - n_take, n_have))
-    vt = np.fromiter((v["time_s"] for v in recent), dtype=np.float64,
+    vt = np.fromiter((v["sample_center"] for v in recent), dtype=np.int64,
                      count=len(recent))
     vv = np.fromiter((v["vad"] for v in recent), dtype=np.int8,
                      count=len(recent))
-    idx = np.searchsorted(vt, times, side="right") - 1
+    idx = np.searchsorted(vt, sample_centers, side="right") - 1
     idx = np.clip(idx, 0, len(vt) - 1)
     return vv[idx].astype(bool)
+
+
+def _vad_lookup(times: np.ndarray) -> np.ndarray | None:
+    """Backward-compatible elapsed-time lookup wrapper."""
+    return _vad_lookup_samples(np.rint(times * SR).astype(np.int64))
 
 
 def _vad_voiced_fraction(window_sec: float) -> float | None:
@@ -433,14 +677,15 @@ def _vad_voiced_fraction(window_sec: float) -> float | None:
     Returns None when VAD is off or no entries cover the window."""
     if not _proc_vad[0]:
         return None
-    cutoff = (time.time() - _t_start) - window_sec
+    with _audio_lock:
+        cutoff_sample = _audio_total_samples[0] - int(window_sec * SR)
     with _vad_buf_lock:
         if not _vad_buf:
             return None
         # Walk from newest backward until we drop below cutoff.
         vals = []
         for entry in reversed(_vad_buf):
-            if entry["time_s"] < cutoff:
+            if entry.get("sample_center", 0) < cutoff_sample:
                 break
             vals.append(entry["vad"])
     if not vals:
@@ -461,13 +706,15 @@ def _vad_thread():
         if not _proc_vad[0]:
             continue
 
-        audio = _get_recent_audio(_vad_grab_sec[0])
-        if audio is None or len(audio) < int(0.3 * SR):
+        audio_info = _get_recent_audio_info(_vad_grab_sec[0])
+        if audio_info is None:
             continue
+        audio = audio_info["audio"]
+        chunk_start_sample = int(audio_info["start_sample"])
+        chunk_end_sample = int(audio_info["end_sample"])
 
-        elapsed_now = time.time() - _t_start
-        chunk_duration = len(audio) / SR
-        chunk_t0 = elapsed_now - chunk_duration
+        if len(audio) < int(0.3 * SR):
+            continue
 
         tensor = torch.from_numpy(audio).float()
         try:
@@ -482,33 +729,44 @@ def _vad_thread():
             print(f"[VAD] {e}", file=sys.stderr)
             continue
 
-        # Build a fixed-Hz timeline over the analysed chunk.
+        # Build a fixed-Hz sample timeline over the analysed chunk.
         grid_hz = float(_vad_grid_hz[0])
-        n_steps = max(1, int(chunk_duration * grid_hz))
-        grid_dt = 1.0 / grid_hz
-        times_in_audio = np.arange(n_steps) * grid_dt + grid_dt / 2.0
-        mask = np.zeros(n_steps, dtype=bool)
+        grid_samples = max(1, int(round(SR / grid_hz)))
+        first_start = ((chunk_start_sample + grid_samples - 1) // grid_samples) * grid_samples
+        frame_starts = np.arange(first_start, chunk_end_sample, grid_samples, dtype=np.int64)
+        if len(frame_starts) == 0:
+            continue
+        frame_ends = np.minimum(frame_starts + grid_samples, chunk_end_sample)
+        frame_centers = ((frame_starts + frame_ends) // 2).astype(np.int64)
+        centers_in_audio = frame_centers - chunk_start_sample
+        mask = np.zeros(len(frame_starts), dtype=bool)
         for seg in timestamps:
-            t_s = seg["start"] / SR
-            t_e = seg["end"] / SR
-            mask |= (times_in_audio >= t_s) & (times_in_audio <= t_e)
-
-        frame_elapsed = times_in_audio + chunk_t0
+            s0 = int(seg["start"])
+            s1 = int(seg["end"])
+            mask |= (centers_in_audio >= s0) & (centers_in_audio <= s1)
 
         # Deduplicate against prior ticks (chunks overlap).
-        cutoff = _last_vad_processed_elapsed[0]
-        new_mask = frame_elapsed > cutoff
+        cutoff = _last_vad_processed_sample[0]
+        new_mask = frame_starts > cutoff
         if not np.any(new_mask):
             continue
         new_idx = np.where(new_mask)[0]
 
         with _vad_buf_lock:
             for i in new_idx:
+                start = int(frame_starts[i])
+                end = int(frame_ends[i])
+                center = int(frame_centers[i])
                 _vad_buf.append({
-                    "time_s": float(frame_elapsed[i]),
+                    "time_s": float(center / SR),
+                    "sample_start": start,
+                    "sample_end": end,
+                    "sample_center": center,
+                    "frame_index": int(start // grid_samples),
                     "vad": 1 if bool(mask[i]) else 0,
                 })
-            _last_vad_processed_elapsed[0] = float(frame_elapsed[new_idx[-1]])
+            _last_vad_processed_sample[0] = int(frame_starts[new_idx[-1]])
+            _last_vad_processed_elapsed[0] = float(frame_centers[new_idx[-1]] / SR)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -541,11 +799,16 @@ else:
 # 7. CSV LOGGING
 # ═══════════════════════════════════════════════════════════════════
 _log_on = False
-_log_file = None
-_log_writer = None
+_log_session_open_flag = [False]
+_log_buffers = {"combined": [], "opensmile": [], "vad": [], "emotion": []}
+_log_paths = {}
 _log_t0 = None
 _log_path = None
 _log_count = [0]
+_log_counts = {"opensmile": 0, "vad": 0, "emotion": 0}
+_log_cursor_opensmile_sample = [-1]
+_log_cursor_vad_sample = [-1]
+_log_cursor_emo_seq = [-1]
 _log_session_start_unix_ms = [""]
 _log_session_start_iso = [""]
 _log_start_at_unix_ms = [""]
@@ -559,8 +822,12 @@ _rec_resume_t = [0.0]     # time.time() when current session started
 _rec_total_rows = [0]     # total rows written since last reset
 
 
+def _feature_log_enabled(key: str) -> bool:
+    return bool(FEATURE_CFG.get("logs", {}).get(key, True))
+
+
 def _log_session_open() -> bool:
-    return _log_file is not None and _log_writer is not None
+    return bool(_log_session_open_flag[0])
 
 
 def _log_session_paused() -> bool:
@@ -575,6 +842,168 @@ def _current_recorded_secs() -> float:
     if _log_on:
         return _rec_elapsed[0] + (time.time() - _rec_resume_t[0])
     return _rec_elapsed[0]
+
+
+def _reset_log_cursors_to_latest() -> None:
+    """Start/resume logging from newly produced rows, not stale backlog."""
+    with _frame_lock:
+        _log_cursor_opensmile_sample[0] = int(
+            _frame_buf[-1].get("sample_start", -1)
+        ) if _frame_buf else -1
+    with _vad_buf_lock:
+        _log_cursor_vad_sample[0] = int(
+            _vad_buf[-1].get("sample_start", -1)
+        ) if _vad_buf else -1
+    with _emo_lock:
+        _log_cursor_emo_seq[0] = int(_emo_buf[-1].get("seq", -1)) if _emo_buf else -1
+
+
+def _session_prefix_cols() -> list[str]:
+    return [
+        "session_start_unix_ms",
+        "session_start_iso",
+        "device_id",
+        "sample_rate",
+    ]
+
+
+def _timing_cols() -> list[str]:
+    return [
+        "frame_index",
+        "sample_start",
+        "sample_end",
+        "sample_center",
+        "start_s",
+        "end_s",
+        "time_s",
+        "timestamp_unix_ms_est",
+    ]
+
+
+def _session_prefix_values() -> list:
+    return [
+        _log_session_start_unix_ms[0],
+        _log_session_start_iso[0],
+        DEVICE_ID,
+        SR,
+    ]
+
+
+def _format_float(value, digits: int = 6) -> str:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return ""
+    return f"{v:.{digits}f}" if not np.isnan(v) else ""
+
+
+def _log_path_with_suffix(path: str, suffix: str) -> str:
+    root, ext = os.path.splitext(path)
+    return f"{root}_{suffix}{ext or '.csv'}"
+
+
+def _normalise_log_base_path(name: str | None) -> str | None:
+    if name is None or str(name).strip() == "":
+        return None
+    raw = str(name).strip()
+    base = os.path.basename(raw)
+    if not base.lower().endswith(".csv"):
+        base += ".csv"
+    return os.path.join(OUTPUT_DIR, base)
+
+
+def _log_target_path(kind: str, base_path: str) -> str:
+    if kind == "combined":
+        return base_path
+    logs = FEATURE_CFG.get("logs", {})
+    suffix = logs.get(f"{kind}_suffix", kind)
+    return _log_path_with_suffix(base_path, suffix)
+
+
+def _opensmile_csv_header() -> list[str]:
+    return (
+        _session_prefix_cols()
+        + _timing_cols()
+        + ["vad", "audio_overflow_count"]
+        + OPENSMILE_LOG_FEATURES
+    )
+
+
+def _vad_csv_header() -> list[str]:
+    return _session_prefix_cols() + _timing_cols() + ["vad"]
+
+
+def _emotion_csv_header() -> list[str]:
+    return (
+        _session_prefix_cols()
+        + [
+            "seq",
+            "sample_start",
+            "sample_end",
+            "sample_center",
+            "start_s",
+            "end_s",
+            "time_s",
+            "timestamp_unix_ms_est",
+            "voiced_fraction",
+            "label",
+            "confidence",
+        ]
+        + EMOTION_DIMS
+    )
+
+
+def _log_header(kind: str) -> list[str]:
+    if kind == "combined":
+        return _csv_header()
+    if kind == "opensmile":
+        return _opensmile_csv_header()
+    if kind == "vad":
+        return _vad_csv_header()
+    if kind == "emotion":
+        return _emotion_csv_header()
+    raise KeyError(kind)
+
+
+def _log_enabled_kind(kind: str) -> bool:
+    if kind == "combined":
+        return _feature_log_enabled("combined_csv")
+    return _feature_log_enabled(f"{kind}_csv")
+
+
+def _clear_log_buffers() -> None:
+    for rows in _log_buffers.values():
+        rows.clear()
+    _log_count[0] = 0
+    for kind in _log_counts:
+        _log_counts[kind] = 0
+    _rec_total_rows[0] = 0
+
+
+def _buffer_log_row(kind: str, row: list) -> None:
+    if not _log_enabled_kind(kind):
+        return
+    _log_buffers[kind].append(row)
+    if kind == "combined":
+        _log_count[0] += 1
+    else:
+        _log_counts[kind] = _log_counts.get(kind, 0) + 1
+
+
+def _write_buffered_csvs(base_path: str) -> dict[str, str]:
+    written = {}
+    for kind, rows in _log_buffers.items():
+        if not _log_enabled_kind(kind) or not rows:
+            continue
+        path = _log_target_path(kind, base_path)
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(_log_header(kind))
+            writer.writerows(rows)
+        written[kind] = path
+        print(f"[LOG] saved {kind} rows={len(rows)} → {path}")
+    return written
 
 
 def _normalise_session_start(session_start_unix_ms=None, session_start_iso=None):
@@ -636,6 +1065,7 @@ def _schedule_log_activation(start_at_unix_ms: str, start_at_iso: str):
             return
 
         _log_start_scheduled[0] = False
+        _reset_log_cursors_to_latest()
         _rec_resume_t[0] = time.time()
         _log_on = True
         print(f"[LOG] scheduled start reached → {_log_path}  start_at={target_iso_value} ({target_ms})")
@@ -656,6 +1086,12 @@ def _csv_header():
         "timestamp_unix_ms",
         "timestamp_iso",
         "time_ms",
+        "frame_sample_start",
+        "frame_sample_end",
+        "frame_sample_center",
+        "frame_time_s",
+        "timestamp_unix_ms_est",
+        "audio_overflow_count",
         "vad",
     ]
     cols += [f[0] for f in FEATURES]
@@ -668,14 +1104,16 @@ def _csv_header():
 def log_start(path: str | None = None, session_start_unix_ms=None,
               session_start_iso=None, start_at_unix_ms=None,
               start_at_iso=None):
-    global _log_on, _log_file, _log_writer, _log_t0, _log_path
+    global _log_on, _log_t0, _log_path
     if _log_session_open():
-        log_stop(reason="replaced")
+        log_discard_stop(reason="replaced")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     if path is None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(OUTPUT_DIR, f"track_{ts}.csv")
+        path = os.path.join(OUTPUT_DIR, f"recording_{DEVICE_ID}_{ts}.csv")
+    _log_paths.clear()
     _log_path = path
+    _clear_log_buffers()
     _log_session_start_unix_ms[0], _log_session_start_iso[0] = _normalise_session_start(
         session_start_unix_ms, session_start_iso
     )
@@ -685,28 +1123,29 @@ def log_start(path: str | None = None, session_start_unix_ms=None,
         default_unix_ms=int(_log_session_start_unix_ms[0]),
         default_iso=_log_session_start_iso[0],
     )
-    _log_file = open(path, "w", newline="")
-    _log_writer = csv.writer(_log_file)
-    _log_writer.writerow(_csv_header())
+    enabled_outputs = [kind for kind in _log_buffers if _log_enabled_kind(kind)]
+    if not enabled_outputs:
+        print("[LOG] no CSV outputs enabled in config_features.yaml")
+        return
+    _log_session_open_flag[0] = True
     _log_t0 = time.time()
-    _log_count[0] = 0
     _rec_elapsed[0] = 0.0
-    _rec_total_rows[0] = 0
     _log_on = False
     now_unix_ms = int(time.time() * 1000)
     start_at_ms = int(_log_start_at_unix_ms[0])
     if start_at_ms <= now_unix_ms:
         _log_start_scheduled[0] = False
+        _reset_log_cursors_to_latest()
         _rec_resume_t[0] = time.time()
         _log_on = True
         print(
-            f"[LOG] new file → {path}  "
+            f"[LOG] RAM session started → {path}  "
             f"session_start={_log_session_start_iso[0]} ({_log_session_start_unix_ms[0]})"
         )
     else:
         _log_start_scheduled[0] = True
         print(
-            f"[LOG] new file scheduled → {path}  "
+            f"[LOG] RAM session scheduled → {path}  "
             f"session_start={_log_session_start_iso[0]} ({_log_session_start_unix_ms[0]})  "
             f"start_at={_log_start_at_iso[0]} ({_log_start_at_unix_ms[0]})"
         )
@@ -727,8 +1166,6 @@ def log_pause():
         return
     _rec_elapsed[0] += time.time() - _rec_resume_t[0]
     _log_on = False
-    if _log_file:
-        _log_file.flush()
     print(f"[LOG] paused → {_log_path}  ({_log_count[0]} rows)")
     _emit_state()
 
@@ -744,14 +1181,19 @@ def log_resume():
     if not _log_session_open():
         print("[LOG] resume requested but no paused session exists")
         return
+    _reset_log_cursors_to_latest()
     _rec_resume_t[0] = time.time()
     _log_on = True
     print(f"[LOG] resumed → {_log_path}")
     _emit_state()
 
 
-def log_stop(reason: str = "stopped"):
-    global _log_on, _log_file, _log_writer, _log_t0
+def log_stop(reason: str = "stopped") -> str:
+    return log_discard_stop(reason=reason)
+
+
+def _finish_log_session(reason: str = "stopped") -> None:
+    global _log_on, _log_t0
     if not _log_session_open():
         return
     _log_schedule_token[0] += 1
@@ -759,15 +1201,42 @@ def log_stop(reason: str = "stopped"):
     if _log_on:
         _rec_elapsed[0] += time.time() - _rec_resume_t[0]
     _log_on = False
-    if _log_file:
-        try:
-            _log_file.flush()
-        except Exception:
-            pass
-        _log_file.close()
-        print(f"[LOG] {reason} → {_log_path}  ({_log_count[0]} rows)")
-    _log_file = _log_writer = _log_t0 = None
+    _log_session_open_flag[0] = False
+    _log_t0 = None
+    print(
+        f"[LOG] {reason} RAM session → {_log_path}  "
+        f"combined={_log_count[0]} opensmile={_log_counts.get('opensmile', 0)} "
+        f"vad={_log_counts.get('vad', 0)} emotion={_log_counts.get('emotion', 0)}"
+    )
+
+
+def log_save_stop(final_name: str | None = None) -> str:
+    global _log_path
+    if not _log_session_open():
+        return "no open log session"
+    target_base = _normalise_log_base_path(final_name) or _log_path
+    if target_base is None:
+        target_base = os.path.join(OUTPUT_DIR, f"recording_{DEVICE_ID}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+    _finish_log_session(reason="saved")
+    written = _write_buffered_csvs(target_base)
+    _log_paths.clear()
+    _log_paths.update(written)
+    _log_path = written.get("combined") or target_base
+    _clear_log_buffers()
     _emit_state()
+    return f"saved {_log_path} ({len(written)} files)"
+
+
+def log_discard_stop(reason: str = "discarded") -> str:
+    global _log_path
+    if not _log_session_open():
+        return "no open log session"
+    _finish_log_session(reason=reason)
+    _clear_log_buffers()
+    _log_paths.clear()
+    _log_path = None
+    _emit_state()
+    return "discarded"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -780,6 +1249,20 @@ _osc_client = None
 _osc_rate_lock = threading.Lock()
 _osc_rate_history: dict[str, list[float]] = {}
 _OSC_RATE_WINDOW = 2.0  # seconds for Hz estimate
+
+
+def _ensure_osc_client(ip: str = None, port: int = None):
+    """Create an OSC client for state replies without enabling streaming."""
+    global _osc_client
+    if _osc_client is not None:
+        return
+    ip = ip or CFG["osc_ip"]
+    port = port or CFG["osc_port"]
+    try:
+        from pythonosc.udp_client import SimpleUDPClient
+        _osc_client = SimpleUDPClient(ip, port)
+    except ImportError:
+        print("[OSC] python-osc not installed. Run: pip install python-osc")
 
 
 def osc_start(ip: str = None, port: int = None):
@@ -819,6 +1302,8 @@ def _emit(addr: str, vals):
     except Exception as e:
         print(f"[OSC] {e}", file=sys.stderr)
         return
+    if addr.endswith("/stats/rate"):
+        return
     now = time.time()
     with _osc_rate_lock:
         hist = _osc_rate_history.setdefault(addr, [])
@@ -844,6 +1329,19 @@ def _emit_state():
         _osc_client.send_message(f"{DEV_PFX}/state/emotion_active", [1 if _proc_emotion[0] else 0])
         _osc_client.send_message(f"{DEV_PFX}/state/emotion_loaded", [1 if _emotion_loaded[0] else 0])
         _osc_client.send_message(f"{DEV_PFX}/state/prosody_active", [1 if _proc_prosody[0] else 0])
+        _osc_client.send_message(f"{DEV_PFX}/state/audio_ok", [1 if _audio_ok[0] else 0])
+        _osc_client.send_message(f"{DEV_PFX}/state/audio_device", [_audio_device_name[0] or ""])
+        _osc_client.send_message(f"{DEV_PFX}/state/audio_error", [_audio_error[0] or ""])
+        _osc_client.send_message(f"{DEV_PFX}/state/osc_send_hz", [float(_osc_send_hz())])
+        _osc_client.send_message(f"{DEV_PFX}/state/osc_max_hz", [float(_research_sync_hz())])
+        _osc_client.send_message(f"{DEV_PFX}/state/research_sync_hz", [float(_research_sync_hz())])
+        _osc_client.send_message(f"{DEV_PFX}/state/research_sync_period_ms", [float(_research_sync_period_ms())])
+        _osc_client.send_message(f"{DEV_PFX}/state/research_emotion_hz", [float(_emotion_hz())])
+        _osc_client.send_message(f"{DEV_PFX}/state/research_emotion_hop_ms", [float(_emo_hop[0] * 1000.0)])
+        _osc_client.send_message(f"{DEV_PFX}/state/research_emotion_window_s", [float(_emo_window[0])])
+        _osc_client.send_message(f"{DEV_PFX}/state/log_recorded_secs", [float(_current_recorded_secs())])
+        _osc_client.send_message(f"{DEV_PFX}/state/log_session_start_iso", [_log_session_start_iso[0] or ""])
+        _osc_client.send_message(f"{DEV_PFX}/state/log_path", [_log_path or ""])
     except Exception as e:
         print(f"[OSC] state emit: {e}", file=sys.stderr)
 
@@ -858,7 +1356,11 @@ def _state_summary() -> str:
         f"vad={int(_proc_vad[0])} "
         f"emotion={int(_proc_emotion[0])} "
         f"emotion_loaded={int(_emotion_loaded[0])} "
-        f"prosody={int(_proc_prosody[0])}"
+        f"prosody={int(_proc_prosody[0])} "
+        f"osc_send_hz={_osc_send_hz():.3g} "
+        f"research_sync_hz={_research_sync_hz():.3g} "
+        f"audio={'ok' if _audio_ok[0] else 'failure'}"
+        + (f" audio_error={_audio_error[0]}" if not _audio_ok[0] and _audio_error[0] else "")
     )
 
 
@@ -883,6 +1385,16 @@ def _set_emotion_proc(on: bool):
     _set_proc(_proc_emotion, "EMOTION", on)
 
 
+def _ctrl_audio_reconnect(addr, *args):
+    return _open_audio_stream()
+
+
+def _ctrl_osc_send_hz(addr, *args):
+    if not args:
+        return f"osc_send_hz={_osc_send_hz():.3g} max={_research_sync_hz():.3g}"
+    return _set_osc_send_hz(args[0])
+
+
 def _ctrl_log_start(addr, *args):
     session_start_unix_ms = args[0] if len(args) >= 1 else None
     session_start_iso = args[1] if len(args) >= 2 else None
@@ -892,6 +1404,11 @@ def _ctrl_log_start(addr, *args):
               session_start_iso=session_start_iso,
               start_at_unix_ms=start_at_unix_ms,
               start_at_iso=start_at_iso)
+
+
+def _ctrl_log_save_stop(addr, *args):
+    final_name = args[0] if len(args) >= 1 else None
+    return log_save_stop(final_name)
 
 
 _ACK_SENTINEL = "__ack__"
@@ -931,6 +1448,8 @@ def _handle_ctrl_command(client_addr, addr: str, command: str, action, *args):
     ok = True
     message = "ok"
     try:
+        if client_addr:
+            _ensure_osc_client(client_addr[0])
         result = action(client_addr, addr, *normal_args)
         if result is not None:
             message = str(result)
@@ -1004,11 +1523,15 @@ def _start_ctrl_listener():
     # eliminates any need to pre-configure the Mac's IP on the Pi.
     map_ctrl("osc_start", lambda client, addr, *a: osc_start(ip=client[0]))
     map_ctrl("osc_stop", lambda client, addr, *a: osc_stop())
+    map_ctrl("osc_send_hz", lambda client, addr, *a: _ctrl_osc_send_hz(addr, *a))
     map_ctrl("log_start", lambda client, addr, *a: _ctrl_log_start(addr, *a))
     map_ctrl("log_pause", lambda client, addr, *a: log_pause())
     map_ctrl("log_resume", lambda client, addr, *a: log_resume())
     map_ctrl("log_stop", lambda client, addr, *a: log_stop())
+    map_ctrl("log_save_stop", lambda client, addr, *a: _ctrl_log_save_stop(addr, *a))
+    map_ctrl("log_discard_stop", lambda client, addr, *a: log_discard_stop())
     map_ctrl("query_state", lambda client, addr, *a: _ctrl_query_state(addr, *a))
+    map_ctrl("audio_reconnect", lambda client, addr, *a: _ctrl_audio_reconnect(addr, *a))
     # Per-stage processing toggles
     map_ctrl("vad_on",      lambda client, addr, *a: _set_proc(_proc_vad,     "VAD",     True))
     map_ctrl("vad_off",     lambda client, addr, *a: _set_proc(_proc_vad,     "VAD",     False))
@@ -1150,6 +1673,10 @@ def _self_stats_thread():
 _stop_event = threading.Event()
 _t_start = time.time()
 _stream: sd.InputStream | None = None
+_stream_lock = threading.Lock()
+_audio_ok = [False]
+_audio_error = ["not started"]
+_audio_device_name = [""]
 
 # Processing toggles (initial state from config, togglable at runtime).
 # CLI --no-* flags force-disable the corresponding stage regardless of config.
@@ -1183,12 +1710,15 @@ def _opensmile_thread():
 
         # Grab short window: interval + margin
         grab_sec = _opensmile_interval[0] + _OPENSMILE_MARGIN
-        audio = _get_recent_audio(grab_sec)
-        if audio is None or len(audio) < int(0.3 * SR):
+        audio_info = _get_recent_audio_info(grab_sec)
+        if audio_info is None:
             continue
+        audio = audio_info["audio"]
+        chunk_start_sample = int(audio_info["start_sample"])
+        overflow_count = int(audio_info["overflow_count"])
 
-        elapsed_now = time.time() - _t_start
-        chunk_duration = len(audio) / SR
+        if len(audio) < int(0.3 * SR):
+            continue
 
         # Run openSMILE on the short chunk
         try:
@@ -1200,21 +1730,22 @@ def _opensmile_thread():
         if df is None or len(df) == 0:
             continue
 
-        # Compute frame times in elapsed wall-clock coordinates
+        # Compute frame times in absolute target-sample coordinates.
         starts = np.array([t.total_seconds() for t in df.index.get_level_values("start")])
         ends = np.array([t.total_seconds() for t in df.index.get_level_values("end")])
-        times_in_audio = (starts + ends) / 2.0
-        # Convert audio-relative → elapsed: audio ends at elapsed_now
-        frame_elapsed = times_in_audio + (elapsed_now - chunk_duration)
+        frame_start_samples = chunk_start_sample + np.rint(starts * SR).astype(np.int64)
+        frame_end_samples = chunk_start_sample + np.rint(ends * SR).astype(np.int64)
+        frame_center_samples = ((frame_start_samples + frame_end_samples) // 2).astype(np.int64)
+        frame_elapsed = frame_center_samples.astype(np.float64) / SR
 
         # VAD: pull state from the independent VAD timeline buffer.
         # When VAD is off OR the buffer has no entries yet, _vad_lookup
         # returns None and every frame is treated as gate-open (vad=-1).
-        speech_mask = _vad_lookup(frame_elapsed)
+        speech_mask = _vad_lookup_samples(frame_center_samples)
 
         # Only keep NEW frames (beyond what we already processed)
-        cutoff = _last_processed_elapsed[0]
-        new_mask = frame_elapsed > cutoff
+        cutoff = _last_processed_sample[0]
+        new_mask = frame_start_samples > cutoff
         if not np.any(new_mask):
             continue
 
@@ -1223,7 +1754,10 @@ def _opensmile_thread():
 
         with _frame_lock:
             for idx in new_indices:
-                t = float(frame_elapsed[idx])
+                start_sample = int(frame_start_samples[idx])
+                end_sample = int(frame_end_samples[idx])
+                center_sample = int(frame_center_samples[idx])
+                t = float(center_sample / SR)
                 # Tri-state VAD: -1 = VAD off, 0 = gate closed, 1 = gate open
                 if speech_mask is None:
                     vad = -1
@@ -1231,9 +1765,23 @@ def _opensmile_thread():
                 else:
                     vad = 1 if bool(speech_mask[idx]) else 0
                     vad_open = (vad == 1)
-                entry = {"time_s": t, "vad": vad}
+                raw_features = {col: float(df.iloc[idx][col]) for col in df.columns}
+                unix_ms = _sample_to_unix_ms(center_sample)
+                entry = {
+                    "time_s": t,
+                    "start_s": float(start_sample / SR),
+                    "end_s": float(end_sample / SR),
+                    "sample_start": start_sample,
+                    "sample_end": end_sample,
+                    "sample_center": center_sample,
+                    "frame_index": int(round(start_sample / max(1, int(round(SR / float(_vad_grid_hz[0])))))),
+                    "timestamp_unix_ms_est": unix_ms,
+                    "audio_overflow_count": overflow_count,
+                    "vad": vad,
+                    "opensmile": raw_features,
+                }
                 for key, _, _, is_nz, _ in FEATURES:
-                    val = float(df.iloc[idx][key])
+                    val = raw_features.get(key, float("nan"))
                     if is_nz and val <= 0:
                         val = float("nan")
                     if is_nz and not vad_open:
@@ -1243,6 +1791,7 @@ def _opensmile_thread():
                 new_count += 1
 
             if new_count > 0:
+                _last_processed_sample[0] = int(frame_start_samples[new_indices[-1]])
                 _last_processed_elapsed[0] = float(frame_elapsed[new_indices[-1]])
 
         # Rate tracking
@@ -1272,9 +1821,13 @@ def _emotion_thread():
         if not _proc_emotion[0]:
             continue
 
-        audio = _get_recent_audio(_emo_window[0])
-        if audio is None:
+        audio_info = _get_recent_audio_info(_emo_window[0])
+        if audio_info is None:
             continue
+        audio = audio_info["audio"]
+        window_start_sample = int(audio_info["start_sample"])
+        window_end_sample = int(audio_info["end_sample"])
+        window_center_sample = (window_start_sample + window_end_sample) // 2
 
         # Gate on VAD activity over the same window we're about to feed
         # to the model. _vad_voiced_fraction returns None when VAD is
@@ -1282,8 +1835,6 @@ def _emotion_thread():
         voiced_frac = _vad_voiced_fraction(_emo_window[0])
         if voiced_frac is not None and voiced_frac < _emo_min_voiced_frac[0]:
             continue
-
-        elapsed_now = time.time() - _t_start
 
         try:
             r = model.predict(audio, sr=SR)
@@ -1294,15 +1845,25 @@ def _emotion_thread():
         scores = r.get("scores", {})
         label = r.get("label", "")
         confidence = r.get("confidence", 0.0)
+        unix_ms = _sample_to_unix_ms(window_center_sample)
 
         entry = {
-            "time_s": elapsed_now,
+            "time_s": float(window_center_sample / SR),
+            "start_s": float(window_start_sample / SR),
+            "end_s": float(window_end_sample / SR),
+            "sample_start": window_start_sample,
+            "sample_end": window_end_sample,
+            "sample_center": window_center_sample,
+            "timestamp_unix_ms_est": unix_ms,
+            "voiced_fraction": None if voiced_frac is None else float(voiced_frac),
             "label": label,
             "confidence": confidence,
             "scores": {d: float(scores.get(d, 0.0)) for d in EMOTION_DIMS},
         }
 
         with _emo_lock:
+            _emo_seq[0] += 1
+            entry["seq"] = int(_emo_seq[0])
             _emo_buf.append(entry)
 
         preds_produced += 1
@@ -1316,6 +1877,96 @@ def _emotion_thread():
 # ═══════════════════════════════════════════════════════════════════
 # 12. LOGGER THREAD
 # ═══════════════════════════════════════════════════════════════════
+def _timing_values(entry: dict) -> list:
+    return [
+        entry.get("frame_index", ""),
+        entry.get("sample_start", ""),
+        entry.get("sample_end", ""),
+        entry.get("sample_center", ""),
+        _format_float(entry.get("start_s")),
+        _format_float(entry.get("end_s")),
+        _format_float(entry.get("time_s")),
+        entry.get("timestamp_unix_ms_est") or "",
+    ]
+
+
+def _write_opensmile_log_rows() -> None:
+    if not _log_enabled_kind("opensmile"):
+        return
+    with _frame_lock:
+        rows = [
+            entry.copy()
+            for entry in _frame_buf
+            if int(entry.get("sample_start", -1)) > _log_cursor_opensmile_sample[0]
+        ]
+    if not rows:
+        return
+    for entry in rows:
+        raw = entry.get("opensmile", {})
+        row = (
+            _session_prefix_values()
+            + _timing_values(entry)
+            + [entry.get("vad", ""), entry.get("audio_overflow_count", "")]
+        )
+        for col in OPENSMILE_LOG_FEATURES:
+            row.append(_format_float(raw.get(col)))
+        _buffer_log_row("opensmile", row)
+    _log_cursor_opensmile_sample[0] = int(rows[-1].get("sample_start", -1))
+
+
+def _write_vad_log_rows() -> None:
+    if not _log_enabled_kind("vad"):
+        return
+    with _vad_buf_lock:
+        rows = [
+            entry.copy()
+            for entry in _vad_buf
+            if int(entry.get("sample_start", -1)) > _log_cursor_vad_sample[0]
+        ]
+    if not rows:
+        return
+    for entry in rows:
+        _buffer_log_row("vad", _session_prefix_values() + _timing_values(entry) + [entry.get("vad", "")])
+    _log_cursor_vad_sample[0] = int(rows[-1].get("sample_start", -1))
+
+
+def _write_emotion_log_rows() -> None:
+    if not _log_enabled_kind("emotion"):
+        return
+    with _emo_lock:
+        rows = [
+            entry.copy()
+            for entry in _emo_buf
+            if int(entry.get("seq", -1)) > _log_cursor_emo_seq[0]
+        ]
+    if not rows:
+        return
+    for entry in rows:
+        scores = entry.get("scores", {})
+        row = _session_prefix_values() + [
+            entry.get("seq", ""),
+            entry.get("sample_start", ""),
+            entry.get("sample_end", ""),
+            entry.get("sample_center", ""),
+            _format_float(entry.get("start_s")),
+            _format_float(entry.get("end_s")),
+            _format_float(entry.get("time_s")),
+            entry.get("timestamp_unix_ms_est") or "",
+            _format_float(entry.get("voiced_fraction")),
+            entry.get("label", ""),
+            _format_float(entry.get("confidence"), digits=4),
+        ]
+        row += [_format_float(scores.get(d), digits=4) for d in EMOTION_DIMS]
+        _buffer_log_row("emotion", row)
+    _log_cursor_emo_seq[0] = int(rows[-1].get("seq", -1))
+
+
+def _write_independent_log_rows() -> None:
+    _write_opensmile_log_rows()
+    _write_vad_log_rows()
+    _write_emotion_log_rows()
+
+
 def _logger_thread():
     """Write CSV rows and send OSC at configurable rate."""
     last_frame = None
@@ -1374,8 +2025,12 @@ def _logger_thread():
                 decay = np.exp(-age / tau)
                 emo_scores = {d: v * decay for d, v in emo_scores.items()}
 
-        # CSV
-        if _log_on and _log_writer is not None:
+        # CSV: independent research logs drain every produced frame/window;
+        # the legacy combined CSV remains a lower-rate status table.
+        if _log_on:
+            _write_independent_log_rows()
+
+        if _log_on and _log_enabled_kind("combined"):
             ms = int(_current_recorded_secs() * 1000)
             row = [
                 _log_session_start_unix_ms[0],
@@ -1383,6 +2038,12 @@ def _logger_thread():
                 timestamp_unix_ms,
                 timestamp_iso,
                 ms,
+                last_frame.get("sample_start", "") if last_frame else "",
+                last_frame.get("sample_end", "") if last_frame else "",
+                last_frame.get("sample_center", "") if last_frame else "",
+                _format_float(last_frame.get("time_s")) if last_frame else "",
+                last_frame.get("timestamp_unix_ms_est") or "" if last_frame else "",
+                last_frame.get("audio_overflow_count", "") if last_frame else "",
                 vad,
             ]  # tri-state: -1 (VAD off), 0 (silent), 1 (speech)
             for key, _, _, _, _ in FEATURES:
@@ -1401,8 +2062,7 @@ def _logger_thread():
                 row.append("")
                 row.append("")
                 row.extend("" for _ in EMOTION_DIMS)
-            _log_writer.writerow(row)
-            _log_count[0] += 1
+            _buffer_log_row("combined", row)
             _rec_total_rows[0] += 1
 
         # OSC (receives processed scores — decay/zeroing already applied)
@@ -1888,12 +2548,8 @@ def _headless_loop():
 # ═══════════════════════════════════════════════════════════════════
 # 15. CLEANUP + MAIN
 # ═══════════════════════════════════════════════════════════════════
-def _cleanup():
+def _close_audio_stream_locked() -> None:
     global _stream
-    _stop_event.set()
-    log_stop()
-    if _osc_on:
-        osc_stop()
     if _stream is not None:
         try:
             _stream.abort()
@@ -1901,6 +2557,103 @@ def _cleanup():
         except Exception:
             pass
         _stream = None
+    _clear_stream_buffers()
+
+
+def _audio_watchdog_thread() -> None:
+    """Mark the audio stream failed if input callbacks stop arriving."""
+    timeout_s = 3.0
+    while not _stop_event.is_set():
+        _stop_event.wait(1.0)
+        if _stop_event.is_set():
+            break
+        if not _audio_ok[0]:
+            continue
+        last = float(_audio_last_callback_unix[0])
+        if last <= 0.0 or time.time() - last <= timeout_s:
+            continue
+        with _stream_lock:
+            if not _audio_ok[0]:
+                continue
+            _close_audio_stream_locked()
+            _audio_ok[0] = False
+            _audio_error[0] = f"no audio callbacks for {timeout_s:g}s"
+            print(f"[AUDIO] audio failure: {_audio_error[0]}", file=sys.stderr)
+            _emit_state()
+
+
+def _open_audio_stream() -> str:
+    """Try to open the configured mic. Failure is reported as state, not exit."""
+    global _stream, _INPUT_SR, _t_start
+    with _stream_lock:
+        _close_audio_stream_locked()
+        _audio_ok[0] = False
+        _audio_error[0] = "opening"
+        _audio_device_name[0] = ""
+        try:
+            dev_idx = resolve_device(CFG.get("audio_device"))
+            if dev_idx is None:
+                print("[AUDIO] using system default input device")
+                dev_name = "system default input"
+            else:
+                try:
+                    dev_name = sd.query_devices(dev_idx)["name"]
+                    print(f"[AUDIO] using device [{dev_idx}] {dev_name}")
+                except Exception:
+                    dev_name = f"index {dev_idx}"
+                    print(f"[AUDIO] using device index {dev_idx}")
+
+            if ARGS.no_resample:
+                native_sr = SR
+                print("[AUDIO] --no-resample: forcing stream open at SR "
+                      f"({SR} Hz), no native-rate detection")
+            else:
+                try:
+                    if dev_idx is not None:
+                        native_sr = int(sd.query_devices(dev_idx)["default_samplerate"])
+                    else:
+                        native_sr = int(sd.query_devices(kind="input")["default_samplerate"])
+                except Exception:
+                    native_sr = SR
+            _INPUT_SR = native_sr
+            if native_sr != SR:
+                print(f"[AUDIO] device native rate={native_sr} Hz, target SR={SR} Hz "
+                      f"- will resample in callback")
+
+            _stream = sd.InputStream(
+                samplerate=native_sr, channels=1, dtype="float32",
+                blocksize=int(native_sr * 0.05), callback=_audio_callback,
+                device=dev_idx,
+            )
+            _audio_last_callback_unix[0] = time.time()
+            _stream.start()
+            if _audio_total_samples[0] == 0:
+                _t_start = time.time()
+            _audio_ok[0] = True
+            _audio_error[0] = ""
+            _audio_device_name[0] = dev_name
+            msg = f"audio connected: {dev_name}"
+            print(f"[AUDIO] {msg}")
+            _emit_state()
+            return msg
+        except Exception as e:
+            _close_audio_stream_locked()
+            _audio_ok[0] = False
+            _audio_error[0] = str(e)
+            _audio_device_name[0] = str(CFG.get("audio_device") or "")
+            msg = f"audio failure: {_audio_error[0]}"
+            print(f"[AUDIO] {msg}", file=sys.stderr)
+            _emit_state()
+            return msg
+
+
+def _cleanup():
+    _stop_event.set()
+    log_stop()
+    if _osc_on:
+        osc_stop()
+    with _stream_lock:
+        _close_audio_stream_locked()
     print("\nClean exit.")
 
 
@@ -1909,7 +2662,7 @@ signal.signal(signal.SIGTERM, lambda *_: (_cleanup(), sys.exit(0)))
 
 
 def main():
-    global _stream, _t_start
+    global _t_start
 
     print(f"Config: SR={SR}, display={'ON' if _display_enabled else 'OFF'}, "
             f"emotion_model={CFG['emotion_model']} "
@@ -1919,82 +2672,28 @@ def main():
     print(f"  Emotion:   window={_emo_window[0]}s, hop={_emo_hop[0]}s")
     print(f"  Logger:    interval={_log_interval[0]}s")
     print(f"  Display:   N={_display_n[0]} frames ({_display_n[0]*0.01:.1f}s)")
-    # Show available input devices and which one we'll use
+
+    # Start remote control/discovery before audio, so a missing MIC1/MIC2
+    # still appears in the central monitor as a failed-but-controllable device.
+    threading.Thread(target=_start_ctrl_listener, daemon=True).start()
+    threading.Thread(target=_hello_thread, daemon=True, name="hello").start()
+    threading.Thread(target=_rate_stats_thread, daemon=True, name="rate_stats").start()
+    threading.Thread(target=_self_stats_thread, daemon=True, name="self_stats").start()
+    threading.Thread(target=_audio_watchdog_thread, daemon=True,
+                     name="audio_watchdog").start()
+
+    # Start processing threads; they idle until the audio callback fills buffers.
+    threading.Thread(target=_opensmile_thread, daemon=True, name="opensmile").start()
+    threading.Thread(target=_vad_thread, daemon=True, name="vad").start()
+    if _emo_model is not None:
+        threading.Thread(target=_emotion_thread, daemon=True, name="emotion").start()
+    threading.Thread(target=_logger_thread, daemon=True, name="logger").start()
+
+    # Show available input devices and attempt the configured mic.
     list_input_devices()
-    dev_idx = resolve_device(CFG.get("audio_device"))
-    if dev_idx is None:
-        print("[AUDIO] using system default input device")
-    else:
-        try:
-            dev_name = sd.query_devices(dev_idx)["name"]
-            print(f"[AUDIO] using device [{dev_idx}] {dev_name}")
-        except Exception:
-            print(f"[AUDIO] using device index {dev_idx}")
-
-    print("Starting… speak into the mic!")
-
-    # Determine native sample rate of the chosen input device. Linux/ALSA
-    # refuses to open a stream at any rate the device doesn't natively
-    # support (no transparent resampling like CoreAudio on macOS). If the
-    # device's native rate differs from SR, open at native rate and let
-    # _audio_callback() resample on the fly. --no-resample disables this
-    # and forces the stream to open at SR (legacy behaviour).
-    global _INPUT_SR
-    if ARGS.no_resample:
-        native_sr = SR
-        print("[AUDIO] --no-resample: forcing stream open at SR "
-              f"({SR} Hz), no native-rate detection")
-    else:
-        try:
-            if dev_idx is not None:
-                native_sr = int(sd.query_devices(dev_idx)["default_samplerate"])
-            else:
-                native_sr = int(sd.query_devices(kind="input")["default_samplerate"])
-        except Exception:
-            native_sr = SR
-    _INPUT_SR = native_sr
-    if native_sr != SR:
-        print(f"[AUDIO] device native rate={native_sr} Hz, target SR={SR} Hz "
-              f"— will resample in callback")
+    _open_audio_stream()
 
     try:
-        _stream = sd.InputStream(
-            samplerate=native_sr, channels=1, dtype="float32",
-            blocksize=int(native_sr * 0.05), callback=_audio_callback,
-            device=dev_idx,
-        )
-        _stream.start()
-        _t_start = time.time()
-
-        # Start processing threads
-        threading.Thread(target=_opensmile_thread, daemon=True,
-                         name="opensmile").start()
-
-        threading.Thread(target=_vad_thread, daemon=True,
-                         name="vad").start()
-
-        if _emo_model is not None:
-            threading.Thread(target=_emotion_thread, daemon=True,
-                             name="emotion").start()
-
-        threading.Thread(target=_logger_thread, daemon=True,
-                         name="logger").start()
-
-        # Start remote control listener
-        threading.Thread(target=_start_ctrl_listener, daemon=True).start()
-
-        # Discovery heartbeat (UDP broadcast /hello so bridge learns Pi IP)
-        threading.Thread(target=_hello_thread, daemon=True,
-                         name="hello").start()
-
-        # Per-address OSC send-rate stats (stdout + /stats/rate to browser)
-        threading.Thread(target=_rate_stats_thread, daemon=True,
-                         name="rate_stats").start()
-
-        # Self-telemetry: RSS / CPU% / temperature (stdout + /stats/self)
-        threading.Thread(target=_self_stats_thread, daemon=True,
-                         name="self_stats").start()
-
         # Auto-start log/OSC from config or CLI
         if CFG.get("log_active", False):
             log_start()

@@ -11,13 +11,15 @@ There are two different audiences for this document:
 
 Do not run the project directly from the USB drive during an actual session. Copy it to the Pi first so each Pi has its own local working folder, local configuration, logs, and model cache.
 
+For a quick map of script responsibilities and preferred entrypoints, see [docs/script_map.md](docs/script_map.md).
+
 ## Table Of Contents
 
 Operator install and run:
 
 - [1. What Runs Where](#1-what-runs-where)
 - [2. Operator Path: Install From Prepared USB](#2-operator-path-install-from-prepared-usb)
-- [7. Microphone Configuration](#7-microphone-configuration)
+- [7. Microphone And Research Configuration](#7-microphone-and-research-configuration)
 - [8. Running On The Pi](#8-running-on-the-pi)
 - [9. Central Receiver](#9-central-receiver)
 
@@ -29,29 +31,39 @@ USB preparer only:
 
 Reference and troubleshooting:
 
-- [4. System Overview](#4-system-overview)
-- [5. Processing Pipeline](#5-processing-pipeline)
-- [6. Repository Layout](#6-repository-layout)
-- [10. Central CSV Collection](#10-central-csv-collection)
-- [Central Collection, CSV Logs, And Data Meaning](docs/central_collection.md)
-- [PDF copy of this README](docs/pdf/README.pdf)
-- [PDF copy of the central collection guide](docs/pdf/central_collection.pdf)
-- [11. Control Commands](#11-control-commands)
-- [12. Critical System Aspects](#12-critical-system-aspects)
-- [13. Emotion Models](#13-emotion-models)
-- [16. Raspberry Pi Setup Reference](#16-raspberry-pi-setup-reference)
-- [17. Diagnostics](#17-diagnostics)
-- [18. Git Notes](#18-git-notes)
+- [Speech Record Analysis](#speech-record-analysis)
+  - [Script Map And Entrypoints](docs/script_map.md)
+  - [Table Of Contents](#table-of-contents)
+  - [1. What Runs Where](#1-what-runs-where)
+  - [2. Operator Path: Install From Prepared USB](#2-operator-path-install-from-prepared-usb)
+  - [3. USB Preparer Path: Build The Offline Bundle](#3-usb-preparer-path-build-the-offline-bundle)
+  - [4. System Overview](#4-system-overview)
+  - [5. Processing Pipeline](#5-processing-pipeline)
+  - [6. Repository Layout](#6-repository-layout)
+  - [7. Microphone And Research Configuration](#7-microphone-and-research-configuration)
+    - [7.1 Research Feature Configuration](#71-research-feature-configuration)
+    - [7.2 Microphone Configuration](#72-microphone-configuration)
+  - [8. Running On The Pi](#8-running-on-the-pi)
+    - [Local one-microphone test on this computer](#local-one-microphone-test-on-this-computer)
+  - [9. Central Receiver](#9-central-receiver)
+  - [10. Central CSV Collection](#10-central-csv-collection)
+  - [11. Control Commands](#11-control-commands)
+  - [12. Critical System Aspects](#12-critical-system-aspects)
+  - [13. Emotion Models](#13-emotion-models)
+  - [14. USB Preparation Details: Offline Python Dependencies](#14-usb-preparation-details-offline-python-dependencies)
+  - [15. USB Preparation Details: VAD And openSMILE](#15-usb-preparation-details-vad-and-opensmile)
+  - [16. Raspberry Pi Setup Reference](#16-raspberry-pi-setup-reference)
+  - [17. Diagnostics](#17-diagnostics)
+  - [18. Git Notes](#18-git-notes)
 
 ## 1. What Runs Where
 
-| Machine                     | What it runs                                           | Typical command                                     |
-| --------------------------- | ------------------------------------------------------ | --------------------------------------------------- |
-| Raspberry Pi, one mic       | One `strip_monitor.py` process                         | `./start_audio_server.sh --config config_mic1.yaml` |
-| Raspberry Pi, two mics      | Two `strip_monitor.py` processes, one per microphone   | `./start_two_mics.sh`                               |
-| Central computer            | Browser receiver and OSC-to-WebSocket bridge           | `./run_web.sh`                                      |
-| Central computer, optional  | CSV collector or log-gathering after a run             | `python osc_collector.py ...` / `gather_logs.sh`    |
-| External drive or USB stick | Installer bundle only; used as the source to copy from | no long-running process                             |
+| Machine                     | What it runs                                           | Typical command                                  |
+| --------------------------- | ------------------------------------------------------ | ------------------------------------------------ |
+| Raspberry Pi                | Two `strip_monitor.py` processes, one per microphone   | `./START_AUDIO_PROCESSING.sh`                    |
+| Central computer            | Browser receiver and OSC-to-WebSocket bridge           | `./run_web.sh`                                   |
+| Central computer, optional  | CSV collector or log-gathering after a run             | `python osc_collector.py ...` / `gather_logs.sh` |
+| External drive or USB stick | Installer bundle only; used as the source to copy from | no long-running process                          |
 
 ## 2. Operator Path: Install From Prepared USB
 
@@ -67,8 +79,10 @@ ExternalDrive/
     setup_pi.sh
     requirements-pi.txt
     wheelhouse/                   # required for offline Python package install
-    config_mic1.example.yaml
-    config_mic2.example.yaml
+    config_mic1.yaml
+    config_mic2.yaml
+    config_features.yaml
+    START_AUDIO_PROCESSING.sh
     models/
       silero-vad/                  # required for offline VAD loading
       iic/
@@ -126,14 +140,14 @@ The `chmod` line restores script execute permissions in case the USB drive or gr
 source venv/bin/activate
 ```
 
-7. List microphones and write down the device names or indices:
+7. Confirm the two USB microphones appear as `MIC1` and `MIC2`:
 
 ```bash
 python strip_monitor.py --list-devices
 ```
 
-8. Edit `pi_id`, `mic_id`, `audio_device`, `ctrl_port`, and `osc_ip` in `config_mic1.yaml`; see [7. Microphone Configuration](#7-microphone-configuration) for what each field means and examples. For a two-microphone Pi, edit `config_mic2.yaml` too.
-9. Start one mic with `./start_audio_server.sh --config config_mic1.yaml`, or two mics with `./start_two_mics.sh`.
+8. Edit `pi_id` and `osc_ip` in `config_mic1.yaml`; see [7. Microphone And Research Configuration](#7-microphone-and-research-configuration) for what each field means and examples. For a two-microphone Pi, edit `config_mic2.yaml` too. The standard microphone names, `MIC1` and `MIC2`, are already set in the templates.
+9. Start the standard two-microphone processing setup with `./START_AUDIO_PROCESSING.sh`.
 10. On the central computer, run `./run_web.sh` to open the browser receiver; see [9. Central Receiver](#9-central-receiver) for what the central computer does and does not need to know.
 
 Replace `INSTALL_DRIVE` with whatever name appeared when you ran `ls /media/$USER`. The `~` symbol means the current user's home folder, so the destination becomes `/home/<username>/SPEECH_RECORD_ANALYSIS`.
@@ -147,7 +161,7 @@ mv ~/SPEECH_RECORD_ANALYSIS ~/SPEECH_RECORD_ANALYSIS_old_$(date +%Y%m%d_%H%M%S)
 cp -a /media/$USER/INSTALL_DRIVE/SPEECH_RECORD_ANALYSIS ~/SPEECH_RECORD_ANALYSIS
 ```
 
-`install_from_bundle.sh` creates `config_mic1.yaml` and `config_mic2.yaml` from the templates if they are missing. These local files are deliberately not tracked by git because each Pi can have different microphone device names, Pi identity, and central-computer IP address.
+`config_mic1.yaml` and `config_mic2.yaml` are functional files in the project. They already assume the standard `MIC1` and `MIC2` audio-device names; normally only `pi_id` or the central-computer network settings need review.
 
 If the bundle is missing `models/` or `wheelhouse/`, `install_from_bundle.sh` stops with a clear error and tells the operator what to ask the USB preparer for. If the Pi is missing required apt packages such as `portaudio19-dev`, `libsndfile1`, or `ffmpeg`, it also stops with a clear error. A completely offline Pi therefore needs either a prepared OS image with those apt packages already installed, or a one-time connected setup before the offline session.
 
@@ -167,8 +181,10 @@ SPEECH_RECORD_ANALYSIS/
   install_from_bundle.sh
   prepare_wheelhouse.sh
   requirements-pi.txt
-  config_mic1.example.yaml
-  config_mic2.example.yaml
+  config_mic1.yaml
+  config_mic2.yaml
+  config_features.yaml
+  START_AUDIO_PROCESSING.sh
   src/
   receiver/
   docs/
@@ -253,25 +269,56 @@ flowchart LR
 
 The repository is not physically split into `RaspberryPi/` and `CentralComputer/` folders. Instead, the launch scripts live at the top level, and the `receiver/` folder contains the central-computer browser interface. This keeps copy/install commands simple while still allowing the same repository folder to be used on a Pi or on the central computer.
 
-| Path                                                   | Purpose                                                            |
-| ------------------------------------------------------ | ------------------------------------------------------------------ |
-| `strip_monitor.py`                                     | Pi-side one-microphone runtime process.                            |
-| `audio_analysis_background.py`                         | Headless single-stream launcher wrapper.                           |
-| `config.yaml`                                          | Default single-microphone configuration.                           |
-| `config_mic1.example.yaml`, `config_mic2.example.yaml` | Templates for two-microphone Pi deployments.                       |
-| `download_models.py`                                   | Pi-side optional one-time model-cache warmup script.               |
-| `setup_pi.sh`                                          | Pi-side installer: apt packages, `venv/`, Python dependencies.     |
-| `start_audio_server.sh`                                | Pi-side launcher for one `strip_monitor.py` process.               |
-| `start_two_mics.sh`, `stop_two_mics.sh`                | Pi-side launch/stop scripts for two microphone processes.          |
-| `diag_audio.py`                                        | Captures a short diagnostic sample and checks resampling plus VAD. |
-| `osc_collector.py`                                     | Central-computer OSC collector that writes CSV files.              |
-| `broadcast_ctrl.py`                                    | Central-computer script to control multiple discovered devices.    |
-| `gather_logs.sh`                                       | Central-computer script to copy Pi-side `output/` folders back.    |
-| `receiver/`                                            | Central-computer Node.js OSC-to-WebSocket bridge and browser UI.   |
-| `src/`                                                 | Audio, VAD, prosody, emotion, MIDI, and CSV helper modules.        |
-| `models/`                                              | Optional project-local emotion2vec and Silero VAD model cache.     |
+| Path                                               | Purpose                                                                        |
+| -------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `strip_monitor.py`                                 | Pi-side one-microphone runtime process.                                        |
+| `audio_analysis_background.py`                     | Headless single-stream launcher wrapper.                                       |
+| `config.yaml`                                      | Default single-microphone configuration.                                       |
+| `config_mic1.yaml`, `config_mic2.yaml`             | Functional configs for the standard MIC1/MIC2 Pi deployment.                   |
+| `config_local_mic1.yaml`, `config_local_mic2.yaml` | Local one-mic test configs for running a simulated Pi on the central computer. |
+| `config_features.yaml`                             | Experiment-wide openSMILE/VAD/emotion feature and CSV-log choices.             |
+| `download_models.py`                               | Pi-side optional one-time model-cache warmup script.                           |
+| `setup_pi.sh`                                      | Pi-side installer: apt packages, `venv/`, Python dependencies.                 |
+| `START_AUDIO_PROCESSING.sh`                        | Pi-side standard launcher for both microphone processes.                       |
+| `START_LOCAL_TEST_PROCESSING.sh`                   | Central-computer local test launcher: default mic works, MIC2 reports failure. |
+| `start_audio_server.sh`                            | Lower-level/manual launcher for one `strip_monitor.py` process.                |
+| `stop_two_mics.sh`                                 | Pi-side stop script for the two microphone processes.                          |
+| `diag_audio.py`                                    | Captures a short diagnostic sample and checks resampling plus VAD.             |
+| `osc_collector.py`                                 | Central-computer OSC collector that writes CSV files.                          |
+| `broadcast_ctrl.py`                                | Central-computer script to control multiple discovered devices.                |
+| `gather_logs.sh`                                   | Central-computer script to copy Pi-side `log_data/` folders back.              |
+| `receiver/`                                        | Central-computer Node.js OSC-to-WebSocket bridge and browser UI.               |
+| `src/`                                             | Audio, VAD, prosody, emotion, MIDI, and CSV helper modules.                    |
+| `models/`                                          | Optional project-local emotion2vec and Silero VAD model cache.                 |
 
-## 7. Microphone Configuration
+## 7. Microphone And Research Configuration
+
+### 7.1 Research Feature Configuration
+
+`config_mic1.yaml` and `config_mic2.yaml` are hardware/operator files: microphone device, Pi identity, control port, central receiver IP, and which processing stages start active.
+
+`config_features.yaml` is the experiment/research file. It decides what openSMILE feature set and level are computed, which openSMILE columns are sent to OSC for visualization, and which independent research CSV logs are written if the operator saves a session. Keep this file the same across all Pis in the same experiment unless you intentionally want different feature extraction settings.
+
+`log_start` starts a RAM-backed log session: rows are buffered in memory while recording. No CSV files are created until the operator presses **SAVE LOG** or sends `/ctrl/log_save_stop`. Saving writes the enabled Pi-local files from the same session:
+
+```text
+log_data/<chosen_name>.csv
+log_data/<chosen_name>_opensmile_lld.csv
+log_data/<chosen_name>_vad.csv
+log_data/<chosen_name>_emotion.csv
+```
+
+Pressing **DISCARD** or sending `/ctrl/log_discard_stop` clears the RAM session without writing CSV files.
+
+The central browser can turn VAD, openSMILE/prosody, emotion, OSC, and logging on or off. It does not choose openSMILE columns, VAD grid rate, or emotion logging fields; those details belong in `config_features.yaml` so the data shape is fixed before the research session starts.
+
+To run with a different feature config:
+
+The standard `./START_AUDIO_PROCESSING.sh` script uses `config_features.yaml` automatically for both microphones.
+
+The default openSMILE research file uses `eGeMAPSv02` low-level descriptors. See [docs/openSmile_information.md](docs/openSmile_information.md) for the rationale and official-reference notes.
+
+### 7.2 Microphone Configuration
 
 Run this section on the Pi after installation has finished and the venv is active.
 
@@ -286,39 +333,32 @@ Example output may look like this:
 ```text
 Available audio input devices:
   [1]   USB PnP Sound Device  (in=1, sr=48000)
-  [2]   HK-MIC1               (in=1, sr=48000)
-  [3]   HK-MIC2               (in=1, sr=48000)
+  [2]   MIC1                  (in=1, sr=48000)
+  [3]   MIC2                  (in=1, sr=48000)
 ```
 
-You can use either the number (`2`) or a unique name substring (`HK-MIC1`) as `audio_device`.
+The standard configuration expects `MIC1` for `config_mic1.yaml` and `MIC2` for `config_mic2.yaml`. `strip_monitor.py` matches these as case-insensitive substrings of the PortAudio device name, so a longer system name containing `MIC1` or `MIC2` is also acceptable.
 
-For an operator install, use `config_mic1.yaml` even when the Pi has only one microphone. `install_from_bundle.sh` creates this file from `config_mic1.example.yaml` if it is missing:
+`config_mic1.yaml` is the functional config for `MIC1`:
 
 ```yaml
 pi_id: null
 mic_id: 1
-audio_device: null
+audio_device: 'MIC1'
 osc_ip: '127.0.0.1'
 osc_port: 9000
 ctrl_port: 9001
 ```
 
-For two microphones, use both local config files. If they do not exist yet, create them from the templates:
+`config_mic2.yaml` is the functional config for `MIC2` and uses `mic_id: 2`, `audio_device: 'MIC2'`, and `ctrl_port: 9002`.
 
-```bash
-cp config_mic1.example.yaml config_mic1.yaml
-cp config_mic2.example.yaml config_mic2.yaml
-```
-
-Then edit each local file for this specific Pi:
+Review each local file for this specific Pi:
 
 - `pi_id`: numeric Pi identity, or `null` to derive identity from hostname.
-- `mic_id`: `1` or `2`.
-- `audio_device`: integer device index or substring of the input device name.
+- `mic_id`: `1` or `2`; already set by the template.
+- `audio_device`: `MIC1` or `MIC2`; already set by the template.
 - `ctrl_port`: `9001` for mic 1, `9002` for mic 2.
 - `osc_ip`: IP address of the central computer running the receiver.
-
-The local files `config_mic1.yaml` and `config_mic2.yaml` are ignored by git because they are hardware-specific.
 
 Concrete example for a Pi with ID `5`, two USB microphones, and the central receiver at `192.168.1.20`:
 
@@ -326,7 +366,7 @@ Concrete example for a Pi with ID `5`, two USB microphones, and the central rece
 # config_mic1.yaml
 pi_id: 5
 mic_id: 1
-audio_device: 'HK-MIC1'
+audio_device: 'MIC1'
 ctrl_port: 9001
 osc_ip: '192.168.1.20'
 osc_port: 9000
@@ -337,14 +377,14 @@ prosody_active: false
 emotion_active: false
 osc_active: false
 log_active: false
-output_dir: 'output'
+output_dir: 'log_data'
 ```
 
 ```yaml
 # config_mic2.yaml
 pi_id: 5
 mic_id: 2
-audio_device: 'HK-MIC2'
+audio_device: 'MIC2'
 ctrl_port: 9002
 osc_ip: '192.168.1.20'
 osc_port: 9000
@@ -355,25 +395,28 @@ prosody_active: false
 emotion_active: false
 osc_active: false
 log_active: false
-output_dir: 'output'
+output_dir: 'log_data'
 ```
 
 If you only want to test locally on the Pi, keep `osc_ip: "127.0.0.1"`. For a real multi-Pi session, set `osc_ip` to the central computer's LAN IP address, for example `192.168.1.20`.
 
 ## 8. Running On The Pi
 
-Run these commands on the Pi from `~/SPEECH_RECORD_ANALYSIS`.
-
-Single microphone:
+Run the standard two-microphone processing command on the Pi from `~/SPEECH_RECORD_ANALYSIS`:
 
 ```bash
-./start_audio_server.sh --config config_mic1.yaml
+./START_AUDIO_PROCESSING.sh
 ```
 
-Two microphones:
+`START_AUDIO_PROCESSING.sh` automatically starts two `strip_monitor.py` processes:
+
+- mic 1 uses `config_mic1.yaml`
+- mic 2 uses `config_mic2.yaml`
+- both use `config_features.yaml`
+
+To watch what they are doing after launch, optionally run:
 
 ```bash
-./start_two_mics.sh
 tail -f logs/mic1.log logs/mic2.log
 ```
 
@@ -388,6 +431,33 @@ Manual run with command-line overrides:
 ```bash
 source venv/bin/activate
 python strip_monitor.py --config config_mic1.yaml --device "USB PnP" --osc-ip 192.168.1.20 --osc-port 9000
+```
+
+### Local one-microphone test on this computer
+
+You can test the central receiver and the two-mic failure behavior on a laptop with only one microphone. Use the local launcher instead of the Pi launcher:
+
+```bash
+./run_web.sh
+```
+
+In a second terminal:
+
+```bash
+./START_LOCAL_TEST_PROCESSING.sh
+```
+
+This starts two local `strip_monitor.py` processes with `pi_id: local`:
+
+- `local-1` / Mic 1 uses this computer's system default input and should show `audio: ok`.
+- `local-2` / Mic 2 intentionally asks for `MIC2`, so it should stay connected but show `audio: failure`.
+
+In the browser receiver, use the Pi/microphone selection menu to choose `Pi local / Mic 1`. Turn on `OSC`, then enable `VAD` or `PROS` if you want to see live data from the functioning local microphone. Selecting `Pi local / Mic 2` should show the failure state, which is the expected one-mic test condition.
+
+Stop the local test processes with the same stop script:
+
+```bash
+./stop_two_mics.sh
 ```
 
 ## 9. Central Receiver
@@ -412,7 +482,7 @@ Bridge defaults:
 - Browser HTTP server: `3000`
 - Command ACK timeout: `150` ms (`ACK_TIMEOUT_MS=150`)
 
-The central computer does not need to know the Linux microphone device names such as `HK-MIC1`. Those names are local to each Pi and are used only in `config_mic1.yaml` or `config_mic2.yaml` so the Pi can open the correct audio input. Once a Pi process is running, it broadcasts a `/hello` message with its logical `device_id`, `pi_id`, `mic_id`, hostname, and control port. The bridge uses that heartbeat, plus OSC addresses under `/dev/<device_id>/...`, to populate the browser device list and route control commands back to the right Pi process.
+The central computer does not need to know the Linux microphone device names `MIC1` and `MIC2`. Those names are local to each Pi and are used only in `config_mic1.yaml` or `config_mic2.yaml` so the Pi can open the correct audio input. Once a Pi process is running, it broadcasts a `/hello` message with its logical `device_id`, `pi_id`, `mic_id`, hostname, and control port. The bridge uses that heartbeat, plus OSC addresses under `/dev/<device_id>/...`, to populate the browser device list and route control commands back to the right Pi process.
 
 Receiver GUI with simulated data:
 
@@ -451,42 +521,46 @@ Run the OSC collector on the central computer. Use a Python environment that has
 
 ```bash
 source venv/bin/activate
-python osc_collector.py --bind 0.0.0.0 --port 9000 --out output
+python osc_collector.py --bind 0.0.0.0 --port 9000 --out log_data/multi
 ```
 
-Each discovered device writes a separate CSV stream under `output/`.
+Each discovered device writes a separate CSV stream under `log_data/multi/`.
 
 To copy CSV logs from Pis after a run, use either network copy or physical SD-card retrieval.
 
 Option A: copy over the network. The central computer must be able to SSH into the Pis by hostname or IP address:
 
 ```bash
-./gather_logs.sh output/session_001 pi1.local pi2.local
+./gather_logs.sh log_data/session_001 pi1.local pi2.local
 ```
 
 If the repository lives at a different path on the Pi, pass it explicitly:
 
 ```bash
-./gather_logs.sh --remote-path SPEECH_RECORD_ANALYSIS/output/ output/session_001 pi1.local
+./gather_logs.sh --remote-path SPEECH_RECORD_ANALYSIS/log_data/ log_data/session_001 pi1.local
 ```
 
-Option B: collect the Pi physically after a long run, remove or mount its SD card on another computer, and copy the Pi-side `SPEECH_RECORD_ANALYSIS/output/` folder from the card. Pi-local CSV logs include full date information in `session_start_unix_ms`, `session_start_iso`, `timestamp_unix_ms`, and `timestamp_iso`, so copied files can still be aligned after the fact.
+Option B: collect the Pi physically after a long run, remove or mount its SD card on another computer, and copy the Pi-side `SPEECH_RECORD_ANALYSIS/log_data/` folder from the card. Pi-local CSV logs include full date information in `session_start_unix_ms`, `session_start_iso`, `timestamp_unix_ms`, and `timestamp_iso`, so copied files can still be aligned after the fact.
 
 ## 11. Control Commands
+
+For operator-facing script control, start with [docs/operator_osc_control.md](docs/operator_osc_control.md). It documents `speech_control.py`, which can be used either as a command-line tool or imported as Python functions for another program. The browser receiver's Command Bus prints the same `OSC SEND udp://IP:PORT /ctrl/...` format used by that script.
 
 Each `strip_monitor.py` instance listens for OSC control messages on its configured `ctrl_port`.
 
 Common controls:
 
-| Address                                 | Arguments                   | Effect                                                       |
-| --------------------------------------- | --------------------------- | ------------------------------------------------------------ |
-| `/ctrl/osc_start`                       | none                        | Start OSC telemetry.                                         |
-| `/ctrl/osc_stop`                        | none                        | Stop OSC telemetry.                                          |
-| `/ctrl/log_start`                       | optional run id / timestamp | Start local CSV logging.                                     |
-| `/ctrl/log_stop`                        | none                        | Stop local CSV logging.                                      |
-| `/ctrl/vad_on`, `/ctrl/vad_off`         | none                        | Toggle VAD.                                                  |
-| `/ctrl/prosody_on`, `/ctrl/prosody_off` | none                        | Toggle prosody extraction.                                   |
-| `/ctrl/emotion_on`, `/ctrl/emotion_off` | none                        | Toggle emotion inference if the model was loaded at startup. |
+| Address                                 | Arguments          | Effect                                                       |
+| --------------------------------------- | ------------------ | ------------------------------------------------------------ |
+| `/ctrl/osc_start`                       | none               | Start OSC telemetry.                                         |
+| `/ctrl/osc_stop`                        | none               | Stop OSC telemetry.                                          |
+| `/ctrl/log_start`                       | optional timestamp | Start RAM-backed local logging.                              |
+| `/ctrl/log_pause`, `/ctrl/log_resume`   | none               | Pause or resume the RAM log session.                         |
+| `/ctrl/log_save_stop`                   | optional CSV name  | Stop and write enabled CSV files.                            |
+| `/ctrl/log_discard_stop`                | none               | Stop and clear the RAM session without writing files.        |
+| `/ctrl/vad_on`, `/ctrl/vad_off`         | none               | Toggle VAD.                                                  |
+| `/ctrl/prosody_on`, `/ctrl/prosody_off` | none               | Toggle prosody extraction.                                   |
+| `/ctrl/emotion_on`, `/ctrl/emotion_off` | none               | Toggle emotion inference if the model was loaded at startup. |
 
 `broadcast_ctrl.py` can fan out the same command to multiple discovered devices without opening the graphical receiver. It discovers devices from `/hello`, applies optional filters, sends the command, and waits for ACK replies by default.
 
@@ -508,8 +582,8 @@ python3 broadcast_ctrl.py log_start --pi 4 --mic 1
 # The same target can be written directly as device_id "4-1".
 python3 broadcast_ctrl.py log_start --device 4-1
 
-# Stop all mic 1 processes across all Pis.
-python3 broadcast_ctrl.py log_stop --mic 1 --timeout 10
+# Save all mic 1 processes across all Pis.
+python3 broadcast_ctrl.py log_save_stop --mic 1 --timeout 10
 ```
 
 If another process is already listening on UDP `9000` for `/hello` discovery, such as `receiver/bridge.js` or `osc_collector.py`, stop it first or run the CLI on a different discovery port that the Pis are configured to broadcast to.
@@ -522,19 +596,20 @@ Live telemetry packets such as VAD, prosody, emotion, and rate updates remain be
 
 This system is designed so the operator can recover useful data even if one part of the live network workflow is imperfect.
 
-| Aspect | What matters operationally |
-| ------ | -------------------------- |
-| Command timing | Use scheduled starts for synchronized recording: `python3 broadcast_ctrl.py log_start --expected 12 --timeout 10 --delay-s 2`. The command is sent first, then each Pi starts logging at the requested future timestamp. This is better than asking every Pi to start immediately as packets arrive. |
-| Command ACKs | Control commands use application-level ACKs. The sender waits `150` ms by default, which should be comfortably above normal wired-Ethernet round-trip time. If a Pi is busy or the network is slower, use `--ack-timeout-ms 250` or set `ACK_TIMEOUT_MS=250` before `./run_web.sh`. |
-| Live telemetry | OSC telemetry is UDP best-effort. Missing one VAD/prosody/emotion packet should not stop the session. The browser display is a live monitor, not the only record of the run. |
-| Local logging fallback | Pi-side CSV logging is the most important fallback. If the central browser, WebSocket bridge, or central collector stops, each Pi can still keep writing its local `output/` files once logging has started. Copy them later with `gather_logs.sh` or from the SD card. |
-| Central collection | `osc_collector.py` is useful for a central long-format CSV stream, but it is not required for Pi-local logging. It listens on the same default OSC port as the browser bridge, so do not run both on UDP `9000` unless one of them is moved to another port. |
-| Status reports | Use `python3 broadcast_ctrl.py status --expected 12 --timeout 10` before a run. It asks every discovered mic process whether OSC/logging/VAD/emotion/prosody are active and reports the ACK message per device. |
-| Emotion fallback | Emotion inference is optional. If the model is missing or disabled, VAD, prosody, OSC, and CSV logging can still run. The operator should not stop a session only because emotion is unavailable. |
-| Offline install fallback | The prepared USB bundle must contain `models/` and `wheelhouse/`. If `install_from_bundle.sh` reports missing apt packages, the Pi image was not fully prepared for offline use; connect once to install system packages or rebuild the SD image. |
-| Time alignment | CSV rows include absolute Unix milliseconds and ISO timestamps. Use those fields to align data copied from different Pis after a run, especially when logs are recovered from SD cards instead of the central collector. |
+| Aspect                   | What matters operationally                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Command timing           | Use scheduled starts for synchronized recording: `python3 broadcast_ctrl.py log_start --expected 12 --timeout 10 --delay-s 2`. The command is sent first, then each Pi starts logging at the requested future timestamp. This is better than asking every Pi to start immediately as packets arrive.                                                                                                                                    |
+| Command ACKs             | Control commands use application-level ACKs. The sender waits `150` ms by default, which should be comfortably above normal wired-Ethernet round-trip time. If a Pi is busy or the network is slower, use `--ack-timeout-ms 250` or set `ACK_TIMEOUT_MS=250` before `./run_web.sh`.                                                                                                                                                     |
+| Audio device failure     | If `MIC1` or `MIC2` is missing, the corresponding Pi process stays alive, continues `/hello` discovery/control, and reports `audio: failure` in the browser instead of silently using the wrong input. Reconnect the USB mic, then press `AUDIO` in the browser or send `python3 broadcast_ctrl.py audio_reconnect --device <id>`.                                                                                                      |
+| Live telemetry           | OSC telemetry is UDP best-effort. Missing one VAD/prosody/emotion packet should not stop the session. The browser display is a live monitor, not the only record of the run.                                                                                                                                                                                                                                                            |
+| Local logging fallback   | Pi-side logging is the most important sample-aligned record. While a session is open, rows are buffered in Pi RAM and written to `log_data/` only when the operator saves. If the central browser, WebSocket bridge, or central collector stops, the Pi process can keep buffering; press **SAVE LOG** or send `/ctrl/log_save_stop` before shutting down. Unsaved RAM sessions are lost if the Pi process exits or the Pi loses power. |
+| Central collection       | `osc_collector.py` is useful for a central long-format CSV stream, but it is not required for Pi-local logging. It listens on the same default OSC port as the browser bridge, so do not run both on UDP `9000` unless one of them is moved to another port.                                                                                                                                                                            |
+| Status reports           | Use `python3 broadcast_ctrl.py status --expected 12 --timeout 10` before a run. It asks every discovered mic process whether OSC/logging/VAD/emotion/prosody are active and reports the ACK message per device.                                                                                                                                                                                                                         |
+| Emotion fallback         | Emotion inference is optional. If the model is missing or disabled, VAD, prosody, OSC, and CSV logging can still run. The operator should not stop a session only because emotion is unavailable.                                                                                                                                                                                                                                       |
+| Offline install fallback | The prepared USB bundle must contain `models/` and `wheelhouse/`. If `install_from_bundle.sh` reports missing apt packages, the Pi image was not fully prepared for offline use; connect once to install system packages or rebuild the SD image.                                                                                                                                                                                       |
+| Time alignment           | CSV rows include absolute Unix milliseconds and ISO timestamps. Use those fields to align data copied from different Pis after a run, especially when logs are recovered from SD cards instead of the central collector.                                                                                                                                                                                                                |
 
-The safest pre-run sequence is: power/network the Pis, confirm `/hello` discovery with `broadcast_ctrl.py --list`, run `broadcast_ctrl.py status`, start logging with a short future delay, then watch the browser receiver as a monitor.
+The safest pre-run sequence is: power/network the Pis, confirm `/hello` discovery with `broadcast_ctrl.py --list`, run `broadcast_ctrl.py status`, confirm each mic shows `audio: ok` in the browser, start logging with a short future delay, then watch the browser receiver as a monitor.
 
 ## 13. Emotion Models
 
@@ -756,5 +831,5 @@ The repository intentionally ignores:
 - `venv/`
 - `receiver/node_modules/`
 - `models/*` except `models/README.md`
-- runtime `output/`, `logs/`, and CSV files
+- runtime `log_data/`, `logs/`, and CSV files
 - local per-Pi configs `config_mic1.yaml` and `config_mic2.yaml`

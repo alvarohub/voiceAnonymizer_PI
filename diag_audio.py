@@ -1,6 +1,6 @@
 """Quick audio-path diagnostic for the Pi.
 
-Captures 10 s from the HK-MIC2 (or whichever device matches --device),
+Captures 10 s from MIC2 (or whichever device matches --device),
 prints RMS / peak levels for each raw 48 kHz channel AND for the
 resampled-to-16 kHz mono signal we feed into the streamer pipeline.
 
@@ -14,7 +14,7 @@ Usage on the Pi:
     source venv/bin/activate
     python diag_audio.py
     # or
-    python diag_audio.py --device HK-MIC2 --seconds 10
+    python diag_audio.py --device MIC2 --seconds 10
 """
 import argparse
 import sys
@@ -24,7 +24,7 @@ import sounddevice as sd
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--device", default="HK-MIC2",
+    p.add_argument("--device", default="MIC2",
                    help="Substring match against sd.query_devices() name")
     p.add_argument("--seconds", type=float, default=10.0)
     p.add_argument("--target-sr", type=int, default=16000)

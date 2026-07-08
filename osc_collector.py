@@ -12,7 +12,7 @@ Architecture
 ────────────
   Pi A (mic 1) ─┐
   Pi A (mic 2) ─┤
-  Pi B (mic 1) ─┼──► UDP 9000 ──► osc_collector.py ──► output/multi/<ts>_<dev>.csv
+    Pi B (mic 1) ─┼──► UDP 9000 ──► osc_collector.py ──► log_data/multi/<ts>_<dev>.csv
   Pi B (mic 2) ─┤
   …             ─┘
 
@@ -32,7 +32,7 @@ CPU% / temperature (from /stats/self), and age since last packet.
 Usage
 ─────
   python osc_collector.py
-  python osc_collector.py --port 9000 --out output/multi --idle-close 30
+    python osc_collector.py --port 9000 --out log_data/multi --idle-close 30
 
 Stop with Ctrl-C — all open files are flushed and closed cleanly.
 
@@ -71,8 +71,8 @@ def parse_args():
                    help="UDP port to listen on (default 9000)")
     p.add_argument("--bind", default="0.0.0.0",
                    help="Interface to bind (default 0.0.0.0 = all)")
-    p.add_argument("--out", default="output/multi",
-                   help="Output directory (default output/multi)")
+    p.add_argument("--out", default="log_data/multi",
+                   help="Output directory (default log_data/multi)")
     p.add_argument("--idle-close", type=float, default=30.0,
                    help="Close a device's CSV after this many seconds of "
                         "silence; a new file opens if it comes back. "

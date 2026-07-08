@@ -1,0 +1,56 @@
+# Functional config for the Mic 2 instance on a Pi.
+# The experiment standard is two USB audio devices named MIC1 and MIC2.
+
+# Device identity
+pi_id: null # null falls back to hostname
+mic_id: 2
+audio_device: 'MIC2'
+ctrl_port: 9002
+
+# Audio
+sample_rate: 16000
+
+# openSMILE
+opensmile_interval: 0.5
+opensmile_margin: 0.1
+
+# Emotion
+emotion_model: 'base' # Model (base or seed). The offline USB bundle currently includes base; use seed only if models/iic/emotion2vec_plus_seed/model.pt is also present.
+emotion_load: true # Set false to skip loading the emotion model entirely on low-memory Pis. If false, emotion cannot be turned on later.
+emo_window: 2
+emo_hop: 0.5
+emo_decay_active: true
+emo_decay_tau: 2.0
+emo_zero_on_silence: false
+
+# VAD
+vad_active: false
+vad_threshold: 0.3
+vad_interval: 0.25
+vad_grab_sec: 0.5
+# VAD timeline/log grid is experiment-wide: config_features.yaml -> vad.grid_hz
+emo_min_voiced_frac: 0.5
+
+# Logging / streaming
+log_active: false
+log_interval: 0.25
+osc_active: false
+
+# Display
+display: false
+display_n: 200
+display_refresh_ms: 150
+
+# OSC
+osc_ip: '127.0.0.1'
+osc_port: 9000
+
+# Self-telemetry
+self_stats_interval: 5.0
+
+# Processing toggles
+prosody_active: false
+emotion_active: false
+
+# Output
+output_dir: 'log_data'

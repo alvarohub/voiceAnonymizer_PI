@@ -1,0 +1,51 @@
+# Edit this file before a real recording session.
+# The start-recording-session command will test every listed Pi/mic first.
+# If any expected process times out or reports audio=failure, recording will not start.
+
+bridge: http://localhost:3000
+ack_timeout: 0.75
+
+# Six Pis, each running MIC1 on ctrl_port 9001 and MIC2 on ctrl_port 9002.
+# IP mapping source:
+# DISPLAY_BROADCAST_PROTOCOL.md -> "4. Pi and player assignment"
+# rpi5-11..rpi5-16 = 192.168.0.11..192.168.0.16
+pis:
+  - pi_id: rpi5-11
+    ip: 192.168.0.11
+    mics: [1, 2]
+
+  - pi_id: rpi5-12
+    ip: 192.168.0.12
+    mics: [1, 2]
+
+  - pi_id: rpi5-13
+    ip: 192.168.0.13
+    mics: [1, 2]
+
+  - pi_id: rpi5-14
+    ip: 192.168.0.14
+    mics: [1, 2]
+
+  - pi_id: rpi5-15
+    ip: 192.168.0.15
+    mics: [1, 2]
+
+  - pi_id: rpi5-16
+    ip: 192.168.0.16
+    mics: [1, 2]
+
+# Processing stages for this session.
+# true sends *_on before logging starts; false sends *_off.
+processing:
+  vad: true
+  prosody: true
+  emotion: false
+
+# Optional live OSC telemetry during the run.
+osc:
+  active: true
+  send_hz: 10
+
+# Start a new RAM-backed logging session after every expected mic passes preflight.
+logging:
+  start: true

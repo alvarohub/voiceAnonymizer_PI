@@ -1,0 +1,55 @@
+# Local one-mic test config for the central computer.
+# Mic 1 uses the system default input device.
+
+# Device identity shown in the receiver menu as Pi local / Mic 1.
+pi_id: local
+mic_id: 1
+audio_device: null
+ctrl_port: 9001
+
+# Audio
+sample_rate: 16000
+
+# openSMILE
+opensmile_interval: 0.5
+opensmile_margin: 0.1
+
+# Emotion
+emotion_model: 'base'
+emotion_load: false
+emo_window: 2
+emo_hop: 0.5
+emo_decay_active: true
+emo_decay_tau: 2.0
+emo_zero_on_silence: false
+
+# VAD
+vad_active: false
+vad_threshold: 0.3
+vad_interval: 0.25
+vad_grab_sec: 0.5
+emo_min_voiced_frac: 0.5
+
+# Logging / streaming (off at launch; toggled from the browser)
+log_active: false
+log_interval: 0.25
+osc_active: false
+
+# Display
+display: false
+display_n: 200
+display_refresh_ms: 150
+
+# OSC to the local central receiver bridge
+osc_ip: '127.0.0.1'
+osc_port: 9000
+
+# Self-telemetry
+self_stats_interval: 5.0
+
+# Processing toggles
+prosody_active: false
+emotion_active: false
+
+# Output
+output_dir: 'log_data'

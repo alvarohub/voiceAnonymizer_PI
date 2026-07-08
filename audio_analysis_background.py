@@ -10,7 +10,7 @@ All other CLI args of strip_monitor.py are forwarded.
 
 Examples:
     python audio_analysis_background.py
-    python audio_analysis_background.py --device HK-MIC1
+    python audio_analysis_background.py --device MIC1
     python audio_analysis_background.py --device 0 --osc-port 9000
     python audio_analysis_background.py --list-devices
 """

@@ -14,10 +14,10 @@ sample_rate: 16000
 
 # Input device. null = system default. Can be:
 #   - integer index (e.g. 0, 1, 3) — see startup log or run: python strip_monitor.py --list-devices
-#   - substring of device name (e.g. 'HK-MIC1', 'MacBook Pro Microphone')
+#   - substring of device name (e.g. 'MIC1', 'MacBook Pro Microphone')
 # Override at runtime with --device <idx-or-name>
-audio_device: HK-MIC
-# Options are : null, 0, 1, 2, 3 (when using indices), or the name of the device ('HK-MIC1', 'MacBook Pro Microphone', etc.). See startup log or run: python strip_monitor.py --list-devices
+audio_device: MIC1
+# Options are: null, 0, 1, 2, 3 (when using indices), or the name of the device ('MIC1', 'MIC2', 'MacBook Pro Microphone', etc.). See startup log or run: python strip_monitor.py --list-devices
 
 # openSMILE prosody
 opensmile_interval: 0.5 #(0.25 min I think. 1.0 is good). Seconds between calls (latency, not resolution — always 10ms frames)
@@ -38,7 +38,7 @@ vad_active: false # initial state — toggle at runtime from browser UI
 vad_threshold: 0.3
 vad_interval: 0.25 # how often the VAD thread runs (seconds)
 vad_grab_sec: 0.5 # audio window analysed per VAD tick (seconds)
-vad_grid_hz: 100 # VAD timeline resolution (Hz) — matches LLD frame rate
+# VAD timeline/log grid is experiment-wide: config_features.yaml → vad.grid_hz
 
 # Emotion gating: skip an inference unless this fraction of the emo_window
 # is voiced according to VAD. Ignored when VAD is off (gate stays open).
@@ -81,4 +81,4 @@ emotion_active: false # model still loads at startup; this only gates processing
 emotion_model: 'base' #('base' works nice) # Can be base (~90M) or seed (~20M)
 
 # Output
-output_dir: 'output'
+output_dir: 'log_data'

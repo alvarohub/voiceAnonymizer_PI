@@ -41,12 +41,12 @@ METADATA:
 Usage:
     # As module
     from src.midi_writer import csv_to_midi
-    csv_to_midi("output/track_20260417_014225.csv", "output/track_20260417_014225.mid")
+    csv_to_midi("log_data/track_20260417_014225.csv", "log_data/track_20260417_014225.mid")
 
     # As script
-    python -m src.midi_writer output/track_20260417_014225.csv
-    python -m src.midi_writer output/track_20260417_014225.csv -o my_output.mid
-    python -m src.midi_writer output/track_20260417_014225.csv --channel 2 --bend-range 4
+    python -m src.midi_writer log_data/track_20260417_014225.csv
+    python -m src.midi_writer log_data/track_20260417_014225.csv -o my_output.mid
+    python -m src.midi_writer log_data/track_20260417_014225.csv --channel 2 --bend-range 4
 """
 
 from __future__ import annotations

@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Build a local Python wheelhouse for offline Raspberry Pi installs.
+# Role: Deployment Phase 1 helper (build wheelhouse).
+# Runs on: One Raspberry Pi with internet access.
+# Called by: Manual operator/developer command.
 #
 # Run this once on a Raspberry Pi that has internet access and the same
 # Raspberry Pi OS / Python version as the offline Pis. This Pi downloads

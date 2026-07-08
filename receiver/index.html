@@ -13,21 +13,25 @@
       }
       body {
         background: #1a1a2e;
-        overflow: hidden;
+        overflow-x: hidden;
+        overflow-y: auto;
         font-family: monospace;
       }
       #status {
         position: fixed;
-        top: 8px;
+        top: 13px;
         right: 12px;
         color: #888;
-        font-size: 11px;
+        font-size: 12px;
         z-index: 10;
+        text-align: right;
+        display: none;
       }
       #device-picker {
         position: fixed;
         top: 6px;
         left: 12px;
+        width: min(580px, calc(100vw - 180px));
         z-index: 10;
         background: #2a2a3e;
         color: #ddd;
@@ -37,6 +41,7 @@
         font-size: 11px;
         padding: 2px 6px;
         cursor: pointer;
+        display: none;
       }
       #device-picker:focus {
         outline: 1px solid #6cf;

@@ -1,8 +1,8 @@
-# Functional config for the Mic 1 instance on a Pi.
-# The experiment standard is two USB audio devices named MIC1 and MIC2.
+# Functional config for Mic 1 on a real Raspberry Pi.
+# Pair this with config_mic2.yaml and config_features.yaml.
 
 # Device identity
-pi_id: null # null falls back to hostname
+pi_id: null # null = derive from local hostname (recommended for real deployment)
 mic_id: 1
 audio_device: 'MIC1'
 ctrl_port: 9001
@@ -15,8 +15,8 @@ opensmile_interval: 0.5
 opensmile_margin: 0.1
 
 # Emotion
-emotion_model: 'base' # Model (base or seed). The offline USB bundle currently includes base; use seed only if models/iic/emotion2vec_plus_seed/model.pt is also present.
-emotion_load: true # Set false to skip loading the emotion model entirely on low-memory Pis. If false, emotion cannot be turned on later.
+emotion_model: 'base' # use seed only if models/iic/emotion2vec_plus_seed/model.pt exists
+emotion_load: true # if false, emotion model is not loaded and cannot be enabled later
 emo_window: 2
 emo_hop: 0.5
 emo_decay_active: true
@@ -24,6 +24,7 @@ emo_decay_tau: 2.0
 emo_zero_on_silence: false
 
 # VAD
+vad_active: false
 vad_threshold: 0.3
 vad_interval: 0.25
 vad_grab_sec: 0.5
@@ -35,20 +36,21 @@ log_active: false
 log_interval: 0.25
 osc_active: false
 
-# Display (always off on the Pi - headless)
+# Display (headless on Pi)
 display: false
 display_n: 200
 display_refresh_ms: 150
 
-# OSC
-osc_ip: '127.0.0.1' # not used: collector auto-routes from /hello sender IP
+# OSC destination (real deployment)
+# Set osc_ip to the central receiver machine LAN IP before real sessions.
+# 127.0.0.1 is only for one-machine/local testing.
+osc_ip: '127.0.0.1'
 osc_port: 9000
 
 # Self-telemetry
 self_stats_interval: 5.0
 
 # Processing toggles
-vad_active: false
 prosody_active: false
 emotion_active: false
 

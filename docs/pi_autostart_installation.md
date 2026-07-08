@@ -3,8 +3,11 @@
 This guide installs two systemd user services per Pi so each device auto-starts
 both microphone pipelines on boot.
 
-Design follows the same service-manager pattern used in `configure_auto_start.py`
-from the robot-game repository:
+For the full end-to-end deployment flow (wheelhouse, sync, install, and autostart),
+use [main_deployment.md](main_deployment.md). This document focuses specifically
+on autostart service setup and verification details.
+
+Design follows the current service-manager flow implemented in `configure_auto_start.py`:
 
 1. write user units
 2. enable lingering
@@ -22,11 +25,7 @@ This is intentionally separate from start_recording_session.yaml.
 - devices.csv = which Pis get systemd auto-start services installed
 - start_recording_session.yaml = which Pi/mic processes are used for a specific recording session
 
-IP mapping comes from:
-
-- DISPLAY_BROADCAST_PROTOCOL.md -> section "4. Pi and player assignment"
-
-Current mapping:
+Current mapping in `devices.csv`:
 
 - rpi5-11 -> 192.168.0.11
 - rpi5-12 -> 192.168.0.12
@@ -41,7 +40,12 @@ Assume project path:
 
 - /home/pi/SPEECH_RECORD_ANALYSIS
 
-On each Pi:
+On each Pi, dependencies and `venv/` must already exist. Preferred setup paths:
+
+- Fleet workflow: run [main_deployment.md](main_deployment.md) Phase 3 (`install_from_bundle.sh`).
+- Manual one-Pi setup: run `bash setup_pi.sh` from `/home/pi/SPEECH_RECORD_ANALYSIS`.
+
+Manual one-Pi setup command:
 
 ```bash
 cd /home/pi/SPEECH_RECORD_ANALYSIS
@@ -54,14 +58,14 @@ Check config files exist:
 - config_mic2.yaml
 - config_features.yaml
 
-Important operational rule:
+Important operational rule after services are enabled:
 
 - Do not run START_AUDIO_PROCESSING.sh manually after enabling services.
 - Use systemd start/stop/restart only, to avoid duplicate processes.
 
 ## 3. Create systemd user units
 
-Preferred (scripted, colleague-style): run once from the control computer.
+Preferred scripted method (recommended): run once from the control computer.
 
 Quick start command:
 
@@ -115,7 +119,7 @@ python3 configure_auto_start.py --devices-file devices.csv
 python3 configure_auto_start.py --dry-run
 ```
 
-Manual equivalent is shown below.
+Manual equivalent is shown below for troubleshooting or special cases.
 
 On each Pi, create:
 
@@ -196,11 +200,31 @@ Important: this still uses start_recording_session.yaml (recording workflow), no
 python speech_control.py test start_recording_session.yaml
 ```
 
-That test must report all 12 expected processes as healthy.
+That test should report all expected processes in your session YAML as healthy.
 
 ## 6. Fleet rollout helper (from control computer)
 
-If SSH keys are ready, run once per Pi:
+Preferred helper commands are now script-based.
+
+Autostart only:
+
+```bash
+python3 configure_auto_start.py --devices-file devices.csv --devices 1-6 --user pi
+```
+
+Full lab-default deployment (includes autostart at the end):
+
+```bash
+bash deploy_lab_defaults.sh
+```
+
+Virtual run first:
+
+```bash
+bash deploy_lab_defaults.sh --dry-run
+```
+
+Legacy manual SSH helper (optional):
 
 ```bash
 for host in 192.168.0.11 192.168.0.12 192.168.0.13 192.168.0.14 192.168.0.15 192.168.0.16; do
@@ -209,7 +233,7 @@ for host in 192.168.0.11 192.168.0.12 192.168.0.13 192.168.0.14 192.168.0.15 192
 done
 ```
 
-Then copy unit files and activate using the commands in sections 3 and 4.
+Then copy unit files and activate using sections 3 and 4.
 
 ## 7. Safe day-of-demo operations
 

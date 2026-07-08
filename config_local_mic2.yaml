@@ -1,7 +1,13 @@
-# Local one-mic test config for the central computer.
-# Mic 2 intentionally asks for MIC2 so it stays visible as audio failure.
+# Local test config for central-computer Mic 2.
+# Keep this separate from config_mic2.yaml used on real Pis.
+#
+# Intentional differences from real Pi config:
+#   - pi_id is fixed to "local" (explicit local test identity)
+#   - audio_device is "MIC2" on purpose, so local tests show an expected
+#     second process that reports audio failure when MIC2 is absent
+#   - emotion_load is false (lighter local test startup)
 
-# Device identity shown in the receiver menu as Pi local / Mic 2.
+# Device identity shown in receiver as Pi local / Mic 2.
 pi_id: local
 mic_id: 2
 audio_device: 'MIC2'
@@ -28,9 +34,10 @@ vad_active: false
 vad_threshold: 0.3
 vad_interval: 0.25
 vad_grab_sec: 0.5
+# VAD timeline/log grid is experiment-wide: config_features.yaml -> vad.grid_hz
 emo_min_voiced_frac: 0.5
 
-# Logging / streaming (off at launch; toggled from the browser)
+# Logging / streaming (off at launch; toggled from browser)
 log_active: false
 log_interval: 0.25
 osc_active: false
@@ -40,7 +47,7 @@ display: false
 display_n: 200
 display_refresh_ms: 150
 
-# OSC to the local central receiver bridge
+# OSC destination for local one-machine test
 osc_ip: '127.0.0.1'
 osc_port: 9000
 

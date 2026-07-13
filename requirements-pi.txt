@@ -12,6 +12,7 @@
 
 # Core
 numpy
+scipy              # required by strip_monitor (resample_poly)
 sounddevice        # needs portaudio19-dev installed via apt
 PyYAML
 

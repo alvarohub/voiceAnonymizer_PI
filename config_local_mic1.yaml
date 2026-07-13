@@ -29,17 +29,17 @@ emo_decay_tau: 2.0
 emo_zero_on_silence: false
 
 # VAD
-vad_active: false
+vad_active: true
 vad_threshold: 0.3
 vad_interval: 0.25
 vad_grab_sec: 0.5
 # VAD timeline/log grid is experiment-wide: config_features.yaml -> vad.grid_hz
 emo_min_voiced_frac: 0.5
 
-# Logging / streaming (off at launch; toggled from browser)
+# Logging / streaming (on at launch for local debugging)
 log_active: false
 log_interval: 0.25
-osc_active: false
+osc_active: true
 
 # Display
 display: false
@@ -54,7 +54,7 @@ osc_port: 9000
 self_stats_interval: 5.0
 
 # Processing toggles
-prosody_active: false
+prosody_active: true
 emotion_active: false
 
 # Output

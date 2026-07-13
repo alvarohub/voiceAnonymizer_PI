@@ -4,11 +4,11 @@ This guide is for configuring and running microphone processing on Pis and verif
 
 ## 1. What Runs Where
 
-| Machine | Process | Typical command |
-| --- | --- | --- |
-| Raspberry Pi | Two `strip_monitor.py` processes, one per microphone | `./START_AUDIO_PROCESSING.sh` |
-| Central computer | Browser receiver and OSC-to-WebSocket bridge | `./run_web.sh --session start_recording_session.yaml` |
-| Central computer, optional | Central OSC CSV collector | `python osc_collector.py --bind 0.0.0.0 --port 9000 --out log_data/multi` |
+| Machine                    | Process                                              | Typical command                                                           |
+| -------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------- |
+| Raspberry Pi               | Two `strip_monitor.py` processes, one per microphone | `./START_AUDIO_PROCESSING.sh`                                             |
+| Central computer           | Browser receiver and OSC-to-WebSocket bridge         | `./run_web.sh --session start_recording_session.yaml`                     |
+| Central computer, optional | Central OSC CSV collector                            | `python osc_collector.py --bind 0.0.0.0 --port 9000 --out log_data/multi` |
 
 For overall script responsibilities, see [script_map.md](script_map.md).
 
@@ -88,6 +88,31 @@ From project root on the control machine:
 ```
 
 In this mode, expected session targets come from `start_recording_session.yaml`, and missing expected processes are shown in red in the GUI.
+
+### 5.1 Fresh local reset before launching receiver
+
+For local testing, run [../fresh_start_local.sh](../fresh_start_local.sh) first so stale
+local `strip_monitor.py` or bridge processes do not contaminate the GUI view.
+
+Recommended sequence:
+
+```bash
+./fresh_start_local.sh --dry-run
+./fresh_start_local.sh
+./run_web.sh --replace --session start_recording_session.yaml
+```
+
+Partial cleanup options:
+
+- `./fresh_start_local.sh --bridge-only` keeps local mics running and only resets receiver/bridge listeners.
+- `./fresh_start_local.sh --mics-only` keeps the bridge untouched and only stops local mic processes.
+- `./stop_two_mics.sh` remains available as a compatibility wrapper for `--mics-only`.
+
+This prevents old local heartbeat senders from showing up as unexpected `local-*`
+streams and avoids port conflicts on `9000`/`8765`/`3000`.
+
+For a concrete two-scenario runbook (laptop-only and control-laptop + one Pi), see
+[quick_test_laptop_one_pi.md](quick_test_laptop_one_pi.md).
 
 ## 6. Session Control (Operator Path)
 

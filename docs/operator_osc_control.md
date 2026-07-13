@@ -4,6 +4,58 @@ For a full script/domain overview and preferred entrypoints, see [script_map.md]
 
 This is the operator manual for starting and controlling a recording session from the command line.
 
+## Execution Context (Read First)
+
+All commands in this guide are run on the control computer, from the local
+repository folder, not on each Raspberry Pi.
+
+Assumption for this workflow:
+
+- The Pi mic processes are already running (for example, from autostart services).
+
+Before running the commands below, the control computer must have:
+
+- This repository folder available locally (for example, `SPEECH_RECORD_ANALYSIS`).
+- Required files in that folder:
+  - `speech_control.py`
+  - `start_recording_session.yaml`
+  - `run_web.sh` and `receiver/` (only if you use the optional GUI)
+- Python libraries:
+  - `python-osc` (required)
+  - `PyYAML` (recommended for full YAML parsing)
+- Optional GUI runtime: Node.js + npm (needed only for `./run_web.sh`)
+
+Install Python dependencies on the control computer if needed:
+
+```bash
+pip install python-osc PyYAML
+```
+
+## Fresh Local Reset (Recommended For Testing)
+
+Before launching receiver/GUI during local testing, run
+[../fresh_start_local.sh](../fresh_start_local.sh) to clear stale local
+`strip_monitor.py` and bridge processes.
+
+```bash
+./fresh_start_local.sh --dry-run
+./fresh_start_local.sh
+./run_web.sh --replace --session start_recording_session.yaml
+```
+
+Partial reset options:
+
+- `./fresh_start_local.sh --bridge-only` keeps local mic processes running.
+- `./fresh_start_local.sh --mics-only` keeps the bridge untouched.
+- `./stop_two_mics.sh` remains as a compatibility wrapper for `--mics-only`.
+
+This prevents stale local heartbeats from appearing as `local-*` and avoids
+port conflicts where a previous bridge instance makes `--session` look ignored.
+See also [pi_runtime_processing.md](pi_runtime_processing.md).
+
+For the exact short workflows used in practice (laptop-only and control-laptop +
+one Pi), see [quick_test_laptop_one_pi.md](quick_test_laptop_one_pi.md).
+
 The normal workflow is:
 
 ```bash
@@ -176,9 +228,10 @@ logging:
 
 For the command-line workflow:
 
+- all commands are executed on the control computer (repo root)
 - the Pi audio processes must already be running
 - the central computer must be able to reach the Pi IP addresses in the YAML
-- the active Python environment must have `python-osc`
+- the active Python environment must have `python-osc` (and preferably `PyYAML`)
 
 Install the dependency if needed:
 
@@ -214,20 +267,29 @@ python speech_control.py broadcast --session start_recording_session.yaml --dry-
 
 The exact enabled files depend on `config_features.yaml`, but the standard saved set is:
 
-| File suffix          | Contents                                                   |
-| -------------------- | ---------------------------------------------------------- |
-| `.csv`               | Combined/status table for quick inspection.                |
-| `_opensmile_lld.csv` | openSMILE low-level descriptor frames with sample timing.  |
-| `_vad.csv`           | VAD timeline with sample timing.                           |
-| `_emotion.csv`       | Emotion inference windows with labels and confidence data. |
+| File suffix          | Contents                                                                      |
+| -------------------- | ----------------------------------------------------------------------------- |
+| `.csv`               | Combined/status table for quick inspection.                                   |
+| `_opensmile_lld.csv` | Standard-style openSMILE LLD table: name, frameTime, Unix interval, features. |
+| `_vad.csv`           | Alignable VAD timeline: name, frameTime, Unix interval, vad.                  |
+| `_emotion.csv`       | Alignable emotion windows with labels, confidence, and scores.                |
 
-Use the sample-aligned columns for research alignment:
+For `_opensmile_lld.csv`, the feature columns come from `opensmile.log_features` in `config_features.yaml`. With the default `log_features: all`, the saved file includes the full configured openSMILE LLD table. The shorter `opensmile.osc_features` list is only for live GUI/OSC display.
+
+Use `frameTime`, `unix_start`, and `unix_end` for the separate openSMILE, VAD, and emotion files. The legacy combined/status CSV still includes project-specific timing columns:
 
 ```text
 sample_start, sample_end, sample_center, start_s, end_s, time_s
 ```
 
 Do not use central-computer receive time for research alignment.
+
+For alignment and quick plotting, copy [../log_data/alignment_template.yaml](../log_data/alignment_template.yaml), fill in the files from one run, then run:
+
+```bash
+cd log_data
+python align_visualize.py alignment.yaml
+```
 
 ## Optional GUI
 

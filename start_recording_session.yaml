@@ -43,7 +43,7 @@ processing:
 
 # Optional live OSC telemetry during the run.
 osc:
-  active: true
+  active: false
   send_hz: 10
 
 # Start a new RAM-backed logging session after every expected mic passes preflight.

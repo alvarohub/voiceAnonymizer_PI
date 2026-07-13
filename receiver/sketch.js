@@ -924,6 +924,27 @@ function micStatusColor(p) {
   return [245, 205, 90];
 }
 
+function inputNameText(p, maxLen = 22) {
+  const raw = String((p && p.audio_device) || '').trim();
+  const name = raw || 'default input';
+  if (name.length <= maxLen) return name;
+  return `${name.slice(0, maxLen - 1)}…`;
+}
+
+function piRowColor(group) {
+  const mics = group && Array.isArray(group.mics) ? group.mics : [];
+  if (mics.length === 0) return [190, 190, 190];
+
+  const allExpected = mics.every((m) => !!m.expected);
+  const allMissing = mics.every((m) => micStatusText(m) === 'missing');
+  if (allExpected && allMissing) return [255, 95, 80];
+
+  const allOffline = mics.every((m) => micStatusText(m) === 'offline');
+  if (allOffline) return [140, 140, 150];
+
+  return [190, 190, 190];
+}
+
 function drawPanel(x, y, w, h, title) {
   noStroke();
   fill(31, 31, 54);
@@ -987,7 +1008,8 @@ function drawHeader() {
     text('No processes discovered yet.', x1 + 12, gy);
   }
   for (const g of groups.slice(0, 7)) {
-    fill(190);
+    const rowCol = piRowColor(g);
+    fill(rowCol[0], rowCol[1], rowCol[2]);
     textAlign(LEFT, TOP);
     textSize(11);
     const piLabel = compact ? `${g.pi_id} ${g.addr || ''}` : `${g.pi_id}  ${g.hostname || ''}  ${g.addr || ''}`;
@@ -998,7 +1020,7 @@ function drawHeader() {
       .sort((a, b) => String(a.mic_id).localeCompare(String(b.mic_id), undefined, { numeric: true }))
       .slice(0, 4)) {
       const col = micStatusColor(mic);
-      const label = `M${mic.mic_id}:${micStatusText(mic)}`;
+      const label = `M${mic.mic_id}:${micStatusText(mic)} (${inputNameText(mic, compact ? 14 : 18)})`;
       const chipW = textWidth(label) + 12;
       const selected = mic.device_id && mic.device_id === selectedDeviceId;
       fill(selected ? 58 : 34, selected ? 72 : 40, selected ? 92 : 58);
@@ -1026,8 +1048,11 @@ function drawHeader() {
     connected ? [110, 245, 130] : [255, 95, 80],
     selectedW - 104,
   );
-  const micName = sel ? `MIC${sel.mic_id}` : 'mic';
-  const audioStatus = audioOk ? `${micName} ok` : `${micName} failure${audioError ? ` - ${audioError}` : ''}`;
+  const micSlot = sel ? `M${sel.mic_id}` : 'M?';
+  const selectedInput = String((sel && sel.audio_device) || audioDevice || 'default input');
+  const audioStatus = audioOk
+    ? `${micSlot} ok (${selectedInput})`
+    : `${micSlot} failure (${selectedInput})${audioError ? ` - ${audioError}` : ''}`;
   drawKeyValue('mic', audioStatus, x2 + 12, ty + 36, audioOk ? [110, 245, 130] : [255, 95, 80], selectedW - 104);
   const logStatus = logRunning
     ? 'recording in RAM'

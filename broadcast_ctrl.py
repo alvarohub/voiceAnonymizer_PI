@@ -235,7 +235,7 @@ def command_args(command: str, args) -> list[str]:
         print(f"[SESSION] scheduled collector_start={target_iso} ({target_ms})")
     else:
         print(f"[SESSION] collector_start={target_iso} ({target_ms})")
-    return [str(target_ms), target_iso, str(target_ms), target_iso]
+    return [str(target_ms), target_iso, str(target_ms), target_iso, f"{float(args.max_minutes):g}"]
 
 
 def actual_command(command: str) -> str:
@@ -468,6 +468,12 @@ def parse_args():
         default=None,
         help="For log_start only: absolute collector timestamp in Unix milliseconds.",
     )
+    parser.add_argument(
+        "--max-minutes",
+        type=float,
+        default=60.0,
+        help="For log_start only: max RAM logging duration in minutes (default 60).",
+    )
     args = parser.parse_args()
 
     if not args.list and args.command is None:
@@ -478,6 +484,9 @@ def parse_args():
 
     if args.command != "log_start" and (args.delay_s or args.start_at_unix_ms is not None):
         parser.error("--delay-s and --start-at-unix-ms are only valid with log_start")
+
+    if args.max_minutes <= 0:
+        parser.error("--max-minutes must be > 0")
 
     return args
 

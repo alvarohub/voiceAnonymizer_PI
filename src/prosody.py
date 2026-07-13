@@ -9,8 +9,9 @@ Two tiers of features:
    standard feature set for affective computing research (Eyben et al.,
    2016).  All 88 go to CSV; a small subset is shown in the live GUI.
 
-2. **pyworld fallback** — basic F0 + energy + ZCR when openSMILE is
-   not installed.
+2. **pyworld legacy fallback** — basic F0 + energy + ZCR only.
+    This is kept for older experiments/debug use and is not feature-parity
+    with the openSMILE LLD/functionals path used in current production flows.
 
 Neither representation is reversible to speech → safe for anonymous
 recording.
@@ -21,7 +22,7 @@ from __future__ import annotations
 import threading
 import numpy as np
 
-# ---------- try openSMILE first, then pyworld ----------
+# ---------- try openSMILE first, then pyworld (legacy/basic path) ----------
 # openSMILE's C library (libSMILEapi) may use process-global state
 # (pitch candidate buffers, voicing probability history) that gets
 # corrupted when two Smile instances call process_signal concurrently,
@@ -297,7 +298,7 @@ def _extract_opensmile(audio: np.ndarray, sr: int) -> dict[str, float]:
 
 
 def _extract_basic(audio: np.ndarray, sr: int) -> dict[str, float]:
-    """Fallback: F0, energy, ZCR via pyworld / numpy."""
+    """Legacy/basic fallback: coarse F0, energy, and ZCR via pyworld/numpy."""
     features: dict[str, float] = {}
 
     # RMS energy

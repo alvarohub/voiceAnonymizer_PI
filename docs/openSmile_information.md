@@ -362,39 +362,32 @@ Reference:
 
 - Silero VAD README and examples: https://github.com/snakers4/silero-vad
 
-### Recommended Research Log Schema
+### Current Project Analysis CSV Schema
 
-For frame-level acoustic logging, prefer one row per openSMILE LLD frame. At 16 kHz and 10 ms hop, this is 100 rows per second.
+For frame-level acoustic logging, the project now writes `_opensmile_lld.csv` close to a common openSMILE CSV shape. VAD and emotion files use the same leading timing columns so the separate files can be aligned later with other sensors.
 
-Recommended core columns:
+The separate analysis CSVs are semicolon-delimited and use these leading columns:
 
 ```text
-session_start_unix_ms
-session_start_iso
-device_id
-sample_rate
-frame_index
-sample_start
-sample_end
-sample_center
-time_s
-time_ms
-timestamp_unix_ms_est
-vad
-vad_ratio
-audio_overflow
-opensmile_* feature columns
-emotion_label
-emotion_confidence
-emotion_* score columns
+name
+frameTime
+unix_start
+unix_end
+<openSMILE feature columns>
 ```
+
+Feature selection is intentionally split in `config_features.yaml`:
+
+- `opensmile.log_features` controls the saved `_opensmile_lld.csv` columns. The default `all` writes the full openSMILE LLD table.
+- `opensmile.osc_features` controls only the smaller live GUI/OSC subset. It does not limit the saved CSV.
 
 Important distinction:
 
-- `sample_*` and `time_s` are the scientific timeline.
-- `timestamp_unix_ms_est` is for approximate alignment with other devices.
+- `frameTime` is the frame start time in seconds on the recording stream timeline.
+- `unix_start` and `unix_end` are estimated wall-clock times for the same frame.
+- The separate analysis files intentionally do not repeat session start, sample rate, or device metadata on every row.
 - OSC can send the latest values at a lower rate and may lag.
-- CSV should write frame rows based on captured samples, not based on logger wake-up time.
+- CSV rows are still generated from captured-sample timing internally, not from logger wake-up time.
 
 ### Practical Changes Implied For `strip_monitor.py`
 
@@ -405,3 +398,393 @@ Important distinction:
 5. When VAD processes a chunk, pass the audio plus its `chunk_start_sample`; convert Silero segment samples into absolute samples and then onto the same 100 Hz frame grid.
 6. Make CSV logging consume frame records from the frame buffer rather than periodically copying only the latest frame.
 7. Keep OSC as a separate visualization stream that can downsample or send latest values.
+
+---
+
+> The user is asking about real-time audio processing with openSMILE in Python. The audEERING `opensmile` package handles feature extraction from audio files, but for real-time streaming I'd capture audio chunks from a microphone using sounddevice or pyaudio and feed them to the `Smile.process_signal` method. I should provide a code example showing the installation and basic setup for streaming audio processing.
+>
+> I need to consider the latency implications: functionals like eGeMAPS require a window of audio to compute, while lower-level descriptors (LLDs) work on a frame-by-frame basis. I'll show a streaming loop with a buffer that demonstrates how to continuously capture microphone input and extract features in real-time.
+
+openSMILE's official Python package (`opensmile` by audEERING) doesn't have a true streaming API — it processes signals you hand it as numpy arrays. But you can build real-time processing by capturing microphone audio in chunks and feeding each chunk (or a sliding window) to the extractor. Here's how.
+
+First, install the dependencies:
+
+```bash
+pip install opensmile sounddevice numpy
+```
+
+## Basic real-time example: process mic audio in blocks
+
+```python
+import numpy as np
+import sounddevice as sd
+import opensmile
+
+SAMPLE_RATE = 16000
+BLOCK_DURATION = 1.0  # seconds per analysis window
+BLOCK_SIZE = int(SAMPLE_RATE * BLOCK_DURATION)
+
+# eGeMAPS functionals: one feature vector per window (88 features)
+smile = opensmile.Smile(
+    feature_set=opensmile.FeatureSet.eGeMAPSv02,
+    feature_level=opensmile.FeatureLevel.Functionals,
+)
+
+def audio_callback(indata, frames, time_info, status):
+    if status:
+        print(status)
+    signal = indata[:, 0].astype(np.float32)  # mono
+    features = smile.process_signal(signal, SAMPLE_RATE)
+    # Example: print pitch and loudness statistics for this window
+    print(
+        f"F0 mean: {features['F0semitoneFrom27.5Hz_sma3nz_amean'].values[0]:.2f} | "
+        f"Loudness: {features['loudness_sma3_amean'].values[0]:.3f}"
+    )
+
+with sd.InputStream(
+    samplerate=SAMPLE_RATE,
+    channels=1,
+    blocksize=BLOCK_SIZE,
+    callback=audio_callback,
+):
+    print("Listening... press Ctrl+C to stop")
+    try:
+        sd.sleep(int(60 * 1000))  # run for 60 seconds
+    except KeyboardInterrupt:
+        pass
+```
+
+This gives you one 88-dimensional eGeMAPS feature vector per second of audio. `process_signal` returns a pandas DataFrame, so you can inspect column names with `smile.feature_names`.
+
+## Sliding window with overlap
+
+Processing disjoint 1-second blocks means abrupt boundaries. For smoother real-time analysis, keep a ring buffer and analyze overlapping windows:
+
+```python
+import numpy as np
+import sounddevice as sd
+import opensmile
+import threading
+
+SAMPLE_RATE = 16000
+WINDOW_SEC = 2.0      # analysis window length
+HOP_SEC = 0.5         # how often to compute features
+WINDOW_SIZE = int(SAMPLE_RATE * WINDOW_SEC)
+
+smile = opensmile.Smile(
+    feature_set=opensmile.FeatureSet.eGeMAPSv02,
+    feature_level=opensmile.FeatureLevel.Functionals,
+)
+
+buffer = np.zeros(WINDOW_SIZE, dtype=np.float32)
+lock = threading.Lock()
+
+def audio_callback(indata, frames, time_info, status):
+    global buffer
+    chunk = indata[:, 0].astype(np.float32)
+    with lock:
+        buffer = np.roll(buffer, -len(chunk))
+        buffer[-len(chunk):] = chunk
+
+def analyze():
+    with lock:
+        signal = buffer.copy()
+    features = smile.process_signal(signal, SAMPLE_RATE)
+    print(features.iloc[0, :5])  # first 5 features
+
+with sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
+                    blocksize=int(SAMPLE_RATE * HOP_SEC),
+                    callback=audio_callback):
+    print("Streaming... Ctrl+C to stop")
+    try:
+        while True:
+            sd.sleep(int(HOP_SEC * 1000))
+            analyze()
+    except KeyboardInterrupt:
+        pass
+```
+
+## A few practical notes
+
+If you want frame-level features (e.g. pitch contour every 10 ms) instead of window statistics, use `FeatureLevel.LowLevelDescriptors` — it returns one row per frame, which suits real-time visualization better. Available feature sets include `ComParE_2016`, `GeMAPSv01b`, and `eGeMAPSv02`; the eGeMAPS sets are much smaller and faster, which matters for real-time use.
+
+Watch the processing time: `process_signal` on a 2-second window typically takes tens of milliseconds, so it comfortably keeps up, but with `ComParE_2016` (6373 features) on longer windows you may lag. Also do the heavy analysis outside the audio callback (as in the second example) — blocking the callback causes dropped audio._Thinking..._
+
+> The user is asking about real-time audio processing with openSMILE in Python. The audEERING `opensmile` package handles feature extraction from audio files, but for real-time streaming I'd capture audio chunks from a microphone using sounddevice or pyaudio and feed them to the `Smile.process_signal` method. I should provide a code example showing the installation and basic setup for streaming audio processing.
+>
+> I need to consider the latency implications: functionals like eGeMAPS require a window of audio to compute, while lower-level descriptors (LLDs) work on a frame-by-frame basis. I'll show a streaming loop with a buffer that demonstrates how to continuously capture microphone input and extract features in real-time.
+
+openSMILE's official Python package (`opensmile` by audEERING) doesn't have a true streaming API — it processes signals you hand it as numpy arrays. But you can build real-time processing by capturing microphone audio in chunks and feeding each chunk (or a sliding window) to the extractor. Here's how.
+
+First, install the dependencies:
+
+```bash
+pip install opensmile sounddevice numpy
+```
+
+## Basic real-time example: process mic audio in blocks
+
+```python
+import numpy as np
+import sounddevice as sd
+import opensmile
+
+SAMPLE_RATE = 16000
+BLOCK_DURATION = 1.0  # seconds per analysis window
+BLOCK_SIZE = int(SAMPLE_RATE * BLOCK_DURATION)
+
+# eGeMAPS functionals: one feature vector per window (88 features)
+smile = opensmile.Smile(
+    feature_set=opensmile.FeatureSet.eGeMAPSv02,
+    feature_level=opensmile.FeatureLevel.Functionals,
+)
+
+def audio_callback(indata, frames, time_info, status):
+    if status:
+        print(status)
+    signal = indata[:, 0].astype(np.float32)  # mono
+    features = smile.process_signal(signal, SAMPLE_RATE)
+    # Example: print pitch and loudness statistics for this window
+    print(
+        f"F0 mean: {features['F0semitoneFrom27.5Hz_sma3nz_amean'].values[0]:.2f} | "
+        f"Loudness: {features['loudness_sma3_amean'].values[0]:.3f}"
+    )
+
+with sd.InputStream(
+    samplerate=SAMPLE_RATE,
+    channels=1,
+    blocksize=BLOCK_SIZE,
+    callback=audio_callback,
+):
+    print("Listening... press Ctrl+C to stop")
+    try:
+        sd.sleep(int(60 * 1000))  # run for 60 seconds
+    except KeyboardInterrupt:
+        pass
+```
+
+This gives you one 88-dimensional eGeMAPS feature vector per second of audio. `process_signal` returns a pandas DataFrame, so you can inspect column names with `smile.feature_names`.
+
+## Sliding window with overlap
+
+Processing disjoint 1-second blocks means abrupt boundaries. For smoother real-time analysis, keep a ring buffer and analyze overlapping windows:
+
+```python
+import numpy as np
+import sounddevice as sd
+import opensmile
+import threading
+
+SAMPLE_RATE = 16000
+WINDOW_SEC = 2.0      # analysis window length
+HOP_SEC = 0.5         # how often to compute features
+WINDOW_SIZE = int(SAMPLE_RATE * WINDOW_SEC)
+
+smile = opensmile.Smile(
+    feature_set=opensmile.FeatureSet.eGeMAPSv02,
+    feature_level=opensmile.FeatureLevel.Functionals,
+)
+
+buffer = np.zeros(WINDOW_SIZE, dtype=np.float32)
+lock = threading.Lock()
+
+def audio_callback(indata, frames, time_info, status):
+    global buffer
+    chunk = indata[:, 0].astype(np.float32)
+    with lock:
+        buffer = np.roll(buffer, -len(chunk))
+        buffer[-len(chunk):] = chunk
+
+def analyze():
+    with lock:
+        signal = buffer.copy()
+    features = smile.process_signal(signal, SAMPLE_RATE)
+    print(features.iloc[0, :5])  # first 5 features
+
+with sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
+                    blocksize=int(SAMPLE_RATE * HOP_SEC),
+                    callback=audio_callback):
+    print("Streaming... Ctrl+C to stop")
+    try:
+        while True:
+            sd.sleep(int(HOP_SEC * 1000))
+            analyze()
+    except KeyboardInterrupt:
+        pass
+```
+
+## A few practical notes
+
+If you want frame-level features (e.g. pitch contour every 10 ms) instead of window statistics, use `FeatureLevel.LowLevelDescriptors` — it returns one row per frame, which suits real-time visualization better. Available feature sets include `ComParE_2016`, `GeMAPSv01b`, and `eGeMAPSv02`; the eGeMAPS sets are much smaller and faster, which matters for real-time use.
+
+Watch the processing time: `process_signal` on a 2-second window typically takes tens of milliseconds, so it comfortably keeps up, but with `ComParE_2016` (6373 features) on longer windows you may lag. Also do the heavy analysis outside the audio callback (as in the second example) — blocking the callback causes dropped audio.
+
+If you need genuinely lower latency than this chunked approach allows, the alternative is the openSMILE C++ binary (`SMILExtract`) with a live-audio config (e.g. `demo/audiorecorder.conf` using the portaudio components), streaming results out via its network or CSV sinks — but for most Python use cases, the sliding-window pattern above is the standard, practical solution.
+
+---
+
+# EXAMPLE CODE for standard openSMILE Csv:
+
+import csv
+import numpy as np
+import sounddevice as sd
+import opensmile
+import threading
+import time
+
+SAMPLE_RATE = 16000
+WINDOW_SEC = 2.0
+HOP_SEC = 0.5
+WINDOW_SIZE = int(SAMPLE_RATE \* WINDOW_SEC)
+OUTPUT_CSV = "features_output.csv"
+SEGMENT_NAME = "live_mic"
+
+FEATURES = [
+"F0semitoneFrom27.5Hz_sma3nz_amean",
+"loudness_sma3_amean",
+"jitterLocal_sma3nz_amean",
+"shimmerLocaldB_sma3nz_amean",
+"HNRdBACF_sma3nz_amean",
+]
+
+smile = opensmile.Smile(
+feature_set=opensmile.FeatureSet.eGeMAPSv02,
+feature_level=opensmile.FeatureLevel.Functionals,
+)
+
+buffer = np.zeros(WINDOW_SIZE, dtype=np.float32)
+lock = threading.Lock()
+
+# Timing state: map sample counts to absolute Unix time
+
+total_samples = 0 # samples received so far
+stream_epoch = None # Unix time corresponding to sample 0
+
+def audio_callback(indata, frames, time_info, status):
+global buffer, total_samples, stream_epoch
+if status:
+print(status)
+chunk = indata[:, 0].astype(np.float32)
+with lock:
+if stream_epoch is None: # Anchor: estimate Unix time of the FIRST sample of this chunk. # Correct for input latency if the backend reports ADC time.
+latency = 0.0
+try:
+latency = max(0.0, time_info.currentTime - time_info.inputBufferAdcTime)
+except (AttributeError, TypeError):
+pass
+stream_epoch = time.time() - latency
+buffer = np.roll(buffer, -len(chunk))
+buffer[-len(chunk):] = chunk
+total_samples += len(chunk)
+
+def main():
+with open(OUTPUT_CSV, "w", newline="") as f:
+writer = csv.writer(f, delimiter=";")
+writer.writerow(
+["name", "frameTime", "unix_start", "unix_end"] + FEATURES
+)
+
+        with sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
+                            blocksize=int(SAMPLE_RATE * HOP_SEC),
+                            callback=audio_callback):
+            print(f"Streaming... writing to {OUTPUT_CSV} (Ctrl+C to stop)")
+            try:
+                while True:
+                    sd.sleep(int(HOP_SEC * 1000))
+
+                    with lock:
+                        if stream_epoch is None or total_samples < WINDOW_SIZE:
+                            continue  # buffer not full yet
+                        signal = buffer.copy()
+                        # Absolute time of the last sample in the buffer:
+                        unix_end = stream_epoch + total_samples / SAMPLE_RATE
+
+                    unix_start = unix_end - WINDOW_SEC
+                    df = smile.process_signal(signal, SAMPLE_RATE)
+
+                    # frameTime: seconds since recording start (openSMILE
+                    # convention), referenced to the window START
+                    frame_time = unix_start - stream_epoch
+
+                    row = (
+                        [f"'{SEGMENT_NAME}'",
+                         f"{frame_time:.6f}",
+                         f"{unix_start:.6f}",
+                         f"{unix_end:.6f}"]
+                        + [f"{df[feat].values[0]:.6f}" for feat in FEATURES]
+                    )
+                    writer.writerow(row)
+                    f.flush()
+
+                    print(f"t={frame_time:7.2f}s  "
+                          f"F0={df[FEATURES[0]].values[0]:6.2f}")
+            except KeyboardInterrupt:
+                print(f"\nStopped. Saved to {OUTPUT_CSV}")
+
+if **name** == "**main**":
+main()
+
+---
+
+# Aligning with your other sensor files
+
+With absolute timestamps on both sides, alignment in pandas is straightforward. merge_asof matches each sensor reading to the nearest (or containing) audio window:
+
+python
+import pandas as pd
+
+audio = pd.read_csv("features_output.csv", sep=";", quotechar="'")
+sensor = pd.read_csv("other_sensor.csv") # must have a unix timestamp column
+
+audio = audio.sort_values("unix_start")
+sensor = sensor.sort_values("timestamp")
+
+aligned = pd.merge_asof(
+sensor, audio,
+left_on="timestamp", right_on="unix_start",
+direction="backward", # sensor reading falls inside/after window start
+tolerance=2.0, # don't match beyond one window length
+)
+
+The CSV file first rows should look like:
+name;frameTime;unix_start;unix_end;F0semitoneFrom27.5Hz_sma3nz_amean;loudness_sma3_amean;jitterLocal_sma3nz_amean;shimmerLocaldB_sma3nz_amean;HNRdBACF_sma3nz_amean
+'live_mic';0.000000;1783012845.231441;1783012847.231441;25.113932;0.412208;0.023101;1.152493;7.881204
+'live_mic';0.500000;1783012845.731441;1783012847.731441;26.004517;0.455092;0.019874;1.098832;8.204119
+'live_mic';1.000000;1783012846.231441;1783012848.231441;24.887203;0.398441;0.025330;1.211008;7.442870
+'live_mic';1.500000;1783012846.731441;1783012848.731441;25.640118;0.441257;0.021092;1.134561;8.011342
+...
+
+Practical caveats
+Which timestamp represents the window? There's no universal convention — some pipelines use the window start, some the center. Since each row summarizes 2 s of audio, an instantaneous sensor reading at time t is best compared against the window covering
+[t−1,t+1], i.e., match on window center if your other sensors are fast. Just document your choice. Storing both unix_start and unix_end (as above) keeps all options open.
+
+Different machines? If the other sensors log on a different computer, absolute timestamps are only as aligned as the system clocks. NTP sync typically gets you within a few milliseconds, which is fine for 0.5 s-hop prosodic features. If both log on the same machine, you're fine as long as everything uses time.time().
+
+Clock drift on long recordings: sound card clocks drift relative to the system clock (order of seconds per hour in bad cases). For recordings under ~30 min the sample-count-based timing above is more precise than repeated time.time() calls; for multi-hour sessions, consider re-anchoring periodically or logging time.time() alongside sample count in each row so you can estimate and correct drift afterwards.
+
+---
+
+# Analysis and visualization of aligned files
+
+There isn't one canonical "openSMILE analysis tool" — the honest answer is that most researchers today do exactly what you're doing: load the CSV into pandas (or R) and build custom analysis. But there are several established tools worth knowing, especially given your multi-sensor use case.
+
+The classic companion: Weka
+Historically, openSMILE and Weka were a standard pairing — that's why openSMILE has native ARFF output. The ComParE/Interspeech challenge baselines for years were "eGeMAPS or ComParE features + SVM in Weka." Weka gives you a GUI for classification, feature selection, and visualization without writing code. It's aging, but if you read older papers in computational paralinguistics, this is the toolchain they used. Your semicolon CSV imports easily, or you can write ARFF directly.
+
+The modern ML path: scikit-learn
+Today's equivalent of the Weka pipeline is pandas + scikit-learn, and that's what current papers use. Typical pattern: standardize features, then SVM or logistic regression for classification, or just statistical tests (scipy) if you're comparing conditions. audEERING (the openSMILE maintainers) also publish a small ecosystem — audformat, audb, audplot — for managing and visualizing audio feature databases in their conventions, which pairs naturally with the Python opensmile package.
+
+For your multi-sensor alignment: ELAN and NOVA
+These may actually be the most useful for you specifically:
+
+ELAN (from the Max Planck Institute) is the standard tool in multimodal interaction research for annotating and inspecting time-aligned data. It can display CSV time series as tracks alongside audio/video and annotation tiers, so you can visually inspect your F0/loudness/HNR curves synchronized with your other sensor streams. Since you have absolute timestamps, aligning tracks is straightforward.
+
+NOVA (University of Augsburg, from the SSI framework ecosystem) is built specifically for annotating and analyzing multimodal signal streams — physiological sensors, audio features, video — with some machine-learning-assisted annotation built in. It understands continuous feature streams like yours natively.
+
+For validating the features: Praat
+Praat is the reference tool in phonetics for pitch, jitter, shimmer, and HNR. It's worth running Praat on a few recordings and comparing against your openSMILE values — they won't match exactly (different algorithms and voicing decisions, and eGeMAPS reports F0 in semitones), but they should correlate strongly. Reviewers in voice research often expect a sanity check like this.
+
+One more, if you go frame-level
+If you ever switch to low-level descriptors instead of window functionals, openXBOW (also from the openSMILE authors) is the standard tool for turning frame-level LLD sequences into bag-of-audio-words representations for classification.
+
+Practical suggestion for your situation: use ELAN for visual inspection and sanity-checking the alignment across sensors, and pandas/scikit-learn (or R) for the actual statistics — that combination covers what most groups in this space actually do.

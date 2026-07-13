@@ -28,6 +28,7 @@ DEFAULT_ACK_TIMEOUT = 0.5
 DEFAULT_SESSION_FILE = "start_recording_session.yaml"
 DEFAULT_HELLO_PORT = 9000
 DEFAULT_DISCOVERY_SECONDS = 5.0
+DEFAULT_LOG_MAX_MINUTES = 60.0
 KNOWN_COMMANDS = {
     "query_state",
     "osc_start",
@@ -273,10 +274,27 @@ def _ack_server(expected_id: str, result: dict, ready: threading.Event, done: th
 
 def _log_start_args(args: list[str]) -> list[str]:
     if args:
+        if len(args) == 1:
+            # Convenience form: log_start <max_minutes>
+            try:
+                numeric = float(args[0])
+            except ValueError:
+                return args
+            if 0 < numeric < 10000:
+                now_ms = int(time.time() * 1000)
+                iso = datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).isoformat(timespec="milliseconds")
+                return [str(now_ms), iso, str(now_ms), iso, f"{numeric:g}"]
+            return args
+        if len(args) == 2:
+            # Backward compatibility: session_start pair only.
+            return [str(args[0]), str(args[1]), str(args[0]), str(args[1]), f"{DEFAULT_LOG_MAX_MINUTES:g}"]
+        if len(args) == 4:
+            # Backward compatibility: no max_minutes provided.
+            return [*args, f"{DEFAULT_LOG_MAX_MINUTES:g}"]
         return args
     now_ms = int(time.time() * 1000)
     iso = datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).isoformat(timespec="milliseconds")
-    return [str(now_ms), iso]
+    return [str(now_ms), iso, str(now_ms), iso, f"{DEFAULT_LOG_MAX_MINUTES:g}"]
 
 
 def _prepare_args(command: str, args: Iterable[str]) -> list[str]:
@@ -543,7 +561,10 @@ def _session_commands(data: dict[str, Any]) -> list[tuple[str, list[str]]]:
     logging = _as_mapping(data.get("logging"), "logging")
     should_start = _bool_value(logging.get("start", True), "logging.start")
     if should_start:
-        commands.append(("log_start", []))
+        max_minutes = float(logging.get("max_minutes", DEFAULT_LOG_MAX_MINUTES))
+        if max_minutes <= 0:
+            raise ValueError("logging.max_minutes must be > 0")
+        commands.append(("log_start", [f"{max_minutes:g}"]))
     return commands
 
 
@@ -636,12 +657,22 @@ def broadcast_ctrl(targets: Iterable[Target], command: str, args: Iterable[str] 
         return []
     command_name = command[6:] if command.startswith("/ctrl/") else command
     base_args = _prepare_args(command_name, args)
-    results = []
+    results: list[Ack | None] = [None] * len(selected)
     print(f"OSC FANOUT {osc_line(command_name, base_args)}  TO {len(selected)} process(es)")
-    for target in selected:
+    threads = []
+
+    def _worker(index: int, target: Target):
         per_target_args = _device_scoped_save_args(command_name, list(base_args), target)
-        results.append(send_ctrl(target, command_name, per_target_args, ack_timeout=ack_timeout, dry_run=dry_run))
-    return results
+        results[index] = send_ctrl(target, command_name, per_target_args, ack_timeout=ack_timeout, dry_run=dry_run)
+
+    for idx, target in enumerate(selected):
+        thread = threading.Thread(target=_worker, args=(idx, target), daemon=True)
+        threads.append(thread)
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    return [r for r in results if r is not None]
 
 
 def find_target(targets: Iterable[Target], device_id: str | None) -> Target:

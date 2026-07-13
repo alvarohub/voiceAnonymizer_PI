@@ -295,9 +295,10 @@ SELF_STATS_INTERVAL_S = float(CFG.get("self_stats_interval", 5.0))
 print(f"[ID] device_id={DEVICE_ID}  (pi_id={PI_ID}, mic_id={MIC_ID})  "
       f"ctrl_port={CTRL_PORT}  osc_prefix={CFG['osc_prefix']}")
 
-# Matplotlib — only import if display enabled.
-# Disabled when --no-display is passed OR config has `display: false`
-# (set this in config.yaml for headless Pi deployments).
+# Matplotlib UI path (legacy operator tooling).
+# Production Pi runs are headless (`--no-display` or `display: false`).
+# Keep this path isolated and avoid spending maintenance effort here unless
+# headless behavior is unaffected and there is an explicit UI requirement.
 _display_enabled = (not ARGS.no_display) and CFG.get("display", True)
 if _display_enabled:
     import matplotlib
@@ -465,6 +466,14 @@ def _sample_to_unix_ms(sample: int) -> int | None:
     if t0 is None:
         return None
     return int((t0 + (sample / SR)) * 1000)
+
+
+def _sample_to_unix_s(sample: int) -> float | None:
+    with _audio_lock:
+        t0 = _audio_unix_t0[0]
+    if t0 is None:
+        return None
+    return t0 + (sample / SR)
 
 
 def _audio_callback(indata, frames, time_info, status):
@@ -815,6 +824,9 @@ _log_start_at_unix_ms = [""]
 _log_start_at_iso = [""]
 _log_start_scheduled = [False]
 _log_schedule_token = [0]
+_log_max_minutes = [60.0]
+_log_max_secs = [3600.0]
+_log_limit_reached = [False]
 
 # Recording timer (accumulates across pause/resume; resets on RESET)
 _rec_elapsed = [0.0]      # accumulated recording seconds
@@ -912,6 +924,28 @@ def _normalise_log_base_path(name: str | None) -> str | None:
     return os.path.join(OUTPUT_DIR, base)
 
 
+def _safe_name_token(value) -> str:
+    text = str(value) if value is not None else ""
+    cleaned = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in text).strip("_")
+    return cleaned or "unknown"
+
+
+def _auto_log_base_path(recorded_secs: int) -> str:
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    pi = _safe_name_token(PI_ID)
+    mic = _safe_name_token(MIC_ID)
+    return os.path.join(OUTPUT_DIR, f"recording_{pi}_mic{mic}_{ts}_{int(recorded_secs)}s.csv")
+
+
+def _parse_log_max_minutes(value, default: float = 60.0) -> float:
+    if value is None or str(value).strip() == "":
+        return float(default)
+    minutes = float(value)
+    if minutes <= 0:
+        raise ValueError("log_start max_minutes must be > 0")
+    return minutes
+
+
 def _log_target_path(kind: str, base_path: str) -> str:
     if kind == "combined":
         return base_path
@@ -921,34 +955,17 @@ def _log_target_path(kind: str, base_path: str) -> str:
 
 
 def _opensmile_csv_header() -> list[str]:
-    return (
-        _session_prefix_cols()
-        + _timing_cols()
-        + ["vad", "audio_overflow_count"]
-        + OPENSMILE_LOG_FEATURES
-    )
+    return ["name", "frameTime", "unix_start", "unix_end"] + OPENSMILE_LOG_FEATURES
 
 
 def _vad_csv_header() -> list[str]:
-    return _session_prefix_cols() + _timing_cols() + ["vad"]
+    return ["name", "frameTime", "unix_start", "unix_end", "vad"]
 
 
 def _emotion_csv_header() -> list[str]:
     return (
-        _session_prefix_cols()
-        + [
-            "seq",
-            "sample_start",
-            "sample_end",
-            "sample_center",
-            "start_s",
-            "end_s",
-            "time_s",
-            "timestamp_unix_ms_est",
-            "voiced_fraction",
-            "label",
-            "confidence",
-        ]
+        ["name", "frameTime", "unix_start", "unix_end"]
+        + ["voiced_fraction", "label", "confidence"]
         + EMOTION_DIMS
     )
 
@@ -967,7 +984,7 @@ def _log_header(kind: str) -> list[str]:
 
 def _log_enabled_kind(kind: str) -> bool:
     if kind == "combined":
-        return _feature_log_enabled("combined_csv")
+        return False
     return _feature_log_enabled(f"{kind}_csv")
 
 
@@ -990,7 +1007,7 @@ def _buffer_log_row(kind: str, row: list) -> None:
         _log_counts[kind] = _log_counts.get(kind, 0) + 1
 
 
-def _write_buffered_csvs(base_path: str) -> dict[str, str]:
+def _write_buffered_csvs(base_path: str, on_saved=None) -> dict[str, str]:
     written = {}
     for kind, rows in _log_buffers.items():
         if not _log_enabled_kind(kind) or not rows:
@@ -998,11 +1015,14 @@ def _write_buffered_csvs(base_path: str) -> dict[str, str]:
         path = _log_target_path(kind, base_path)
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", newline="") as f:
-            writer = csv.writer(f)
+            delimiter = ";" if kind in {"opensmile", "vad", "emotion"} else ","
+            writer = csv.writer(f, delimiter=delimiter)
             writer.writerow(_log_header(kind))
             writer.writerows(rows)
         written[kind] = path
         print(f"[LOG] saved {kind} rows={len(rows)} → {path}")
+        if on_saved is not None:
+            on_saved(kind, path)
     return written
 
 
@@ -1103,7 +1123,7 @@ def _csv_header():
 
 def log_start(path: str | None = None, session_start_unix_ms=None,
               session_start_iso=None, start_at_unix_ms=None,
-              start_at_iso=None):
+              start_at_iso=None, max_minutes=None):
     global _log_on, _log_t0, _log_path
     if _log_session_open():
         log_discard_stop(reason="replaced")
@@ -1117,13 +1137,16 @@ def log_start(path: str | None = None, session_start_unix_ms=None,
     _log_session_start_unix_ms[0], _log_session_start_iso[0] = _normalise_session_start(
         session_start_unix_ms, session_start_iso
     )
+    _log_max_minutes[0] = _parse_log_max_minutes(max_minutes, default=60.0)
+    _log_max_secs[0] = float(_log_max_minutes[0] * 60.0)
+    _log_limit_reached[0] = False
     _log_start_at_unix_ms[0], _log_start_at_iso[0] = _normalise_start_at(
         start_at_unix_ms,
         start_at_iso,
         default_unix_ms=int(_log_session_start_unix_ms[0]),
         default_iso=_log_session_start_iso[0],
     )
-    enabled_outputs = [kind for kind in _log_buffers if _log_enabled_kind(kind)]
+    enabled_outputs = [kind for kind in ("opensmile", "vad", "emotion") if _log_enabled_kind(kind)]
     if not enabled_outputs:
         print("[LOG] no CSV outputs enabled in config_features.yaml")
         return
@@ -1140,14 +1163,16 @@ def log_start(path: str | None = None, session_start_unix_ms=None,
         _log_on = True
         print(
             f"[LOG] RAM session started → {path}  "
-            f"session_start={_log_session_start_iso[0]} ({_log_session_start_unix_ms[0]})"
+            f"session_start={_log_session_start_iso[0]} ({_log_session_start_unix_ms[0]})  "
+            f"max_minutes={_log_max_minutes[0]:g}"
         )
     else:
         _log_start_scheduled[0] = True
         print(
             f"[LOG] RAM session scheduled → {path}  "
             f"session_start={_log_session_start_iso[0]} ({_log_session_start_unix_ms[0]})  "
-            f"start_at={_log_start_at_iso[0]} ({_log_start_at_unix_ms[0]})"
+            f"start_at={_log_start_at_iso[0]} ({_log_start_at_unix_ms[0]})  "
+            f"max_minutes={_log_max_minutes[0]:g}"
         )
         _schedule_log_activation(_log_start_at_unix_ms[0], _log_start_at_iso[0])
     _emit_state()
@@ -1166,7 +1191,8 @@ def log_pause():
         return
     _rec_elapsed[0] += time.time() - _rec_resume_t[0]
     _log_on = False
-    print(f"[LOG] paused → {_log_path}  ({_log_count[0]} rows)")
+    total_rows = sum(_log_counts.get(k, 0) for k in ("opensmile", "vad", "emotion"))
+    print(f"[LOG] paused → {_log_path}  ({total_rows} rows)")
     _emit_state()
 
 
@@ -1177,6 +1203,9 @@ def log_resume():
         return
     if _log_session_scheduled():
         print(f"[LOG] session already scheduled → {_log_start_at_iso[0]} ({_log_start_at_unix_ms[0]})")
+        return
+    if _log_limit_reached[0]:
+        print(f"[LOG] RAM limit reached ({_log_max_minutes[0]:g} min); save or discard this session")
         return
     if not _log_session_open():
         print("[LOG] resume requested but no paused session exists")
@@ -1205,26 +1234,27 @@ def _finish_log_session(reason: str = "stopped") -> None:
     _log_t0 = None
     print(
         f"[LOG] {reason} RAM session → {_log_path}  "
-        f"combined={_log_count[0]} opensmile={_log_counts.get('opensmile', 0)} "
+        f"opensmile={_log_counts.get('opensmile', 0)} "
         f"vad={_log_counts.get('vad', 0)} emotion={_log_counts.get('emotion', 0)}"
     )
 
 
-def log_save_stop(final_name: str | None = None) -> str:
+def log_save_stop(final_name: str | None = None, saved_notify=None) -> str:
     global _log_path
     if not _log_session_open():
         return "no open log session"
+    recorded_secs = int(round(_current_recorded_secs()))
     target_base = _normalise_log_base_path(final_name) or _log_path
     if target_base is None:
-        target_base = os.path.join(OUTPUT_DIR, f"recording_{DEVICE_ID}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        target_base = _auto_log_base_path(recorded_secs)
     _finish_log_session(reason="saved")
-    written = _write_buffered_csvs(target_base)
+    written = _write_buffered_csvs(target_base, on_saved=saved_notify)
     _log_paths.clear()
     _log_paths.update(written)
-    _log_path = written.get("combined") or target_base
+    _log_path = target_base
     _clear_log_buffers()
     _emit_state()
-    return f"saved {_log_path} ({len(written)} files)"
+    return f"saved {len(written)} files for {_log_path}"
 
 
 def log_discard_stop(reason: str = "discarded") -> str:
@@ -1342,6 +1372,8 @@ def _emit_state():
         _osc_client.send_message(f"{DEV_PFX}/state/log_recorded_secs", [float(_current_recorded_secs())])
         _osc_client.send_message(f"{DEV_PFX}/state/log_session_start_iso", [_log_session_start_iso[0] or ""])
         _osc_client.send_message(f"{DEV_PFX}/state/log_path", [_log_path or ""])
+        _osc_client.send_message(f"{DEV_PFX}/state/log_limit_reached", [1 if _log_limit_reached[0] else 0])
+        _osc_client.send_message(f"{DEV_PFX}/state/log_max_minutes", [float(_log_max_minutes[0])])
     except Exception as e:
         print(f"[OSC] state emit: {e}", file=sys.stderr)
 
@@ -1353,6 +1385,7 @@ def _state_summary() -> str:
         f"log_open={int(_log_session_open())} "
         f"log_paused={int(_log_session_paused())} "
         f"log_scheduled={int(_log_session_scheduled())} "
+        f"log_limit_reached={int(_log_limit_reached[0])} "
         f"vad={int(_proc_vad[0])} "
         f"emotion={int(_proc_emotion[0])} "
         f"emotion_loaded={int(_emotion_loaded[0])} "
@@ -1400,15 +1433,31 @@ def _ctrl_log_start(addr, *args):
     session_start_iso = args[1] if len(args) >= 2 else None
     start_at_unix_ms = args[2] if len(args) >= 3 else None
     start_at_iso = args[3] if len(args) >= 4 else None
+    max_minutes = args[4] if len(args) >= 5 else None
+
+    if len(args) == 1:
+        token = str(args[0]).strip()
+        try:
+            numeric = float(token)
+        except ValueError:
+            numeric = None
+        if numeric is not None and 0 < numeric < 10000:
+            session_start_unix_ms = None
+            session_start_iso = None
+            start_at_unix_ms = None
+            start_at_iso = None
+            max_minutes = token
+
     log_start(session_start_unix_ms=session_start_unix_ms,
               session_start_iso=session_start_iso,
               start_at_unix_ms=start_at_unix_ms,
-              start_at_iso=start_at_iso)
+              start_at_iso=start_at_iso,
+              max_minutes=max_minutes)
 
 
-def _ctrl_log_save_stop(addr, *args):
+def _ctrl_log_save_stop(addr, *args, saved_notify=None):
     final_name = args[0] if len(args) >= 1 else None
-    return log_save_stop(final_name)
+    return log_save_stop(final_name, saved_notify=saved_notify)
 
 
 _ACK_SENTINEL = "__ack__"
@@ -1443,6 +1492,21 @@ def _send_ctrl_ack(client_addr, command: str, ack_id: str | None,
         print(f"[ACK] {command} {ack_id}: {e}", file=sys.stderr)
 
 
+def _send_saved_notice(client_addr, ack_id: str | None, ack_port: int | None,
+                       kind: str, path: str):
+    if not ack_port or not client_addr:
+        return
+    try:
+        from pythonosc.udp_client import SimpleUDPClient
+        client = SimpleUDPClient(client_addr[0], int(ack_port))
+        client.send_message(
+            f"{DEV_PFX}/saved",
+            [ack_id or "", str(kind), os.path.basename(path), str(path)],
+        )
+    except Exception as e:
+        print(f"[SAVED] {kind} {path}: {e}", file=sys.stderr)
+
+
 def _handle_ctrl_command(client_addr, addr: str, command: str, action, *args):
     normal_args, ack_id, ack_port = _split_ctrl_ack_args(args)
     ok = True
@@ -1450,7 +1514,17 @@ def _handle_ctrl_command(client_addr, addr: str, command: str, action, *args):
     try:
         if client_addr:
             _ensure_osc_client(client_addr[0])
-        result = action(client_addr, addr, *normal_args)
+        if command == "log_save_stop":
+            result = action(
+                client_addr,
+                addr,
+                *normal_args,
+                saved_notify=lambda kind, path: _send_saved_notice(
+                    client_addr, ack_id, ack_port, kind, path
+                ),
+            )
+        else:
+            result = action(client_addr, addr, *normal_args)
         if result is not None:
             message = str(result)
     except Exception as e:
@@ -1528,7 +1602,7 @@ def _start_ctrl_listener():
     map_ctrl("log_pause", lambda client, addr, *a: log_pause())
     map_ctrl("log_resume", lambda client, addr, *a: log_resume())
     map_ctrl("log_stop", lambda client, addr, *a: log_stop())
-    map_ctrl("log_save_stop", lambda client, addr, *a: _ctrl_log_save_stop(addr, *a))
+    map_ctrl("log_save_stop", lambda client, addr, *a, saved_notify=None: _ctrl_log_save_stop(addr, *a, saved_notify=saved_notify))
     map_ctrl("log_discard_stop", lambda client, addr, *a: log_discard_stop())
     map_ctrl("query_state", lambda client, addr, *a: _ctrl_query_state(addr, *a))
     map_ctrl("audio_reconnect", lambda client, addr, *a: _ctrl_audio_reconnect(addr, *a))
@@ -1890,6 +1964,20 @@ def _timing_values(entry: dict) -> list:
     ]
 
 
+def _standard_timing_values(entry: dict) -> list:
+    sample_start = int(entry.get("sample_start", 0))
+    sample_end = int(entry.get("sample_end", sample_start))
+    frame_time = entry.get("start_s")
+    if frame_time is None or frame_time == "":
+        frame_time = sample_start / SR
+    return [
+        f"'{DEVICE_ID}'",
+        _format_float(frame_time),
+        _format_float(_sample_to_unix_s(sample_start)),
+        _format_float(_sample_to_unix_s(sample_end)),
+    ]
+
+
 def _write_opensmile_log_rows() -> None:
     if not _log_enabled_kind("opensmile"):
         return
@@ -1903,11 +1991,7 @@ def _write_opensmile_log_rows() -> None:
         return
     for entry in rows:
         raw = entry.get("opensmile", {})
-        row = (
-            _session_prefix_values()
-            + _timing_values(entry)
-            + [entry.get("vad", ""), entry.get("audio_overflow_count", "")]
-        )
+        row = _standard_timing_values(entry)
         for col in OPENSMILE_LOG_FEATURES:
             row.append(_format_float(raw.get(col)))
         _buffer_log_row("opensmile", row)
@@ -1926,7 +2010,7 @@ def _write_vad_log_rows() -> None:
     if not rows:
         return
     for entry in rows:
-        _buffer_log_row("vad", _session_prefix_values() + _timing_values(entry) + [entry.get("vad", "")])
+        _buffer_log_row("vad", _standard_timing_values(entry) + [entry.get("vad", "")])
     _log_cursor_vad_sample[0] = int(rows[-1].get("sample_start", -1))
 
 
@@ -1943,15 +2027,7 @@ def _write_emotion_log_rows() -> None:
         return
     for entry in rows:
         scores = entry.get("scores", {})
-        row = _session_prefix_values() + [
-            entry.get("seq", ""),
-            entry.get("sample_start", ""),
-            entry.get("sample_end", ""),
-            entry.get("sample_center", ""),
-            _format_float(entry.get("start_s")),
-            _format_float(entry.get("end_s")),
-            _format_float(entry.get("time_s")),
-            entry.get("timestamp_unix_ms_est") or "",
+        row = _standard_timing_values(entry) + [
             _format_float(entry.get("voiced_fraction")),
             entry.get("label", ""),
             _format_float(entry.get("confidence"), digits=4),
@@ -1969,6 +2045,7 @@ def _write_independent_log_rows() -> None:
 
 def _logger_thread():
     """Write CSV rows and send OSC at configurable rate."""
+    global _log_on
     last_frame = None
     last_emo = {}
     ticks_produced = 0
@@ -2025,45 +2102,19 @@ def _logger_thread():
                 decay = np.exp(-age / tau)
                 emo_scores = {d: v * decay for d, v in emo_scores.items()}
 
-        # CSV: independent research logs drain every produced frame/window;
-        # the legacy combined CSV remains a lower-rate status table.
+        if _log_on and _current_recorded_secs() >= _log_max_secs[0]:
+            _rec_elapsed[0] = float(_log_max_secs[0])
+            _log_on = False
+            _log_limit_reached[0] = True
+            print(
+                f"[LOG] max RAM duration reached ({_log_max_minutes[0]:g} min) → "
+                "new data is no longer buffered; save or discard"
+            )
+            _emit_state()
+
+        # CSV: independent research logs drain every produced frame/window.
         if _log_on:
             _write_independent_log_rows()
-
-        if _log_on and _log_enabled_kind("combined"):
-            ms = int(_current_recorded_secs() * 1000)
-            row = [
-                _log_session_start_unix_ms[0],
-                _log_session_start_iso[0],
-                timestamp_unix_ms,
-                timestamp_iso,
-                ms,
-                last_frame.get("sample_start", "") if last_frame else "",
-                last_frame.get("sample_end", "") if last_frame else "",
-                last_frame.get("sample_center", "") if last_frame else "",
-                _format_float(last_frame.get("time_s")) if last_frame else "",
-                last_frame.get("timestamp_unix_ms_est") or "" if last_frame else "",
-                last_frame.get("audio_overflow_count", "") if last_frame else "",
-                vad,
-            ]  # tri-state: -1 (VAD off), 0 (silent), 1 (speech)
-            for key, _, _, _, _ in FEATURES:
-                v = feature_means.get(key, float("nan"))
-                row.append(f"{v:.4f}" if not np.isnan(v) else "")
-            if _proc_emotion[0]:
-                label = last_emo.get("label", "")
-                conf = last_emo.get("confidence", 0.0)
-                row.append(label)
-                row.append(f"{conf:.4f}" if conf else "")
-                for d in EMOTION_DIMS:
-                    v = emo_scores.get(d, 0.0)
-                    row.append(f"{v:.4f}")
-            else:
-                # Keep column count stable when emotion is toggled off.
-                row.append("")
-                row.append("")
-                row.extend("" for _ in EMOTION_DIMS)
-            _buffer_log_row("combined", row)
-            _rec_total_rows[0] += 1
 
         # OSC (receives processed scores — decay/zeroing already applied)
         _osc_send(vad, feature_means, emo_scores)
@@ -2518,7 +2569,7 @@ if _display_enabled:
 # 14. HEADLESS LOOP
 # ═══════════════════════════════════════════════════════════════════
 def _headless_loop():
-    """No display — threads handle everything. Just wait."""
+    """Primary production path: no display, worker threads do all processing."""
     print("Running headless. Press Ctrl-C to stop.")
     while not _stop_event.is_set():
         time.sleep(1.0)

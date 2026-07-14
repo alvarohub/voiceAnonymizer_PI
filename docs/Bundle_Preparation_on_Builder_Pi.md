@@ -146,3 +146,21 @@ If all four pass, the bundle is complete. Unplug the builder Pi and continue wit
 - **Do not commit them to Git.** Even the Mac copy should be rebuilt via this Phase 1 whenever `requirements-pi.txt` or the apt package list changes.
 - **Same-arch requirement.** These wheels and `.deb`s are `aarch64`-only. They will not install on an `x86_64` Pi image (Pi 4/5 default 64-bit OS is fine).
 - **The builder Pi does not need to be part of the fleet.** In our lab it is a spare 16 GB Pi 5 used only for bundle work.
+
+## 8. Copying To A USB Drive (Handoff To Another Machine)
+
+If the fleet deployment will be performed from a *different* computer (e.g. a colleague's laptop that has network access to the fleet subnet), copy the entire bundled repo to a USB drive using the helper script:
+
+```bash
+./copy_to_usb.sh /Volumes/YOUR_USB_NAME
+```
+
+The script:
+
+- Excludes Mac-only bloat (`.venv/`, `receiver/node_modules/`, `__pycache__/`, `.git/`, `log_data/`) — these are useless on the target machine and cause slow copy on USB filesystems.
+- Includes everything else: source code, `models/`, `wheelhouse/`, `debs/`, configs.
+- Uses `rsync` — safe to re-run to resume/update.
+
+Tip: run `ls /Volumes/` first to see mounted drives.
+
+On the colleague's machine, they can then run `deploy_bundle_to_fleet.py` **from inside their copy of the folder** — no absolute paths are hardcoded on the source side (`--source-dir` defaults to `.`), so the repo can live anywhere on their filesystem.

@@ -1,0 +1,28 @@
+# System-level dependencies required by the audio + ML stack on the fleet Pis.
+#
+# Single source of truth used by:
+#   prepare_debs.sh           - downloads these .debs (and every transitive
+#                               dependency) into ./debs/ on the builder Pi.
+#   install_from_bundle.sh    - installs from ./debs/ on the fleet Pis and then
+#                               verifies each of these is present.
+#
+# Format: one package per line. `#` starts a comment. Blank lines ignored.
+
+# Python + venv (required by setup_pi.sh to create the venv on the fleet Pi).
+python3-venv
+python3-pip
+python3-dev
+
+# PortAudio (sounddevice backend for microphone capture).
+portaudio19-dev
+libportaudio2
+
+# libsndfile (soundfile / torchaudio decoder for WAV / FLAC handling).
+libsndfile1
+
+# FFmpeg (torchaudio backends, general audio processing).
+ffmpeg
+
+# Toolchain (needed only if any pip wheel falls back to a source build).
+git
+build-essential

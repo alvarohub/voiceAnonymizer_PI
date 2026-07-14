@@ -1,12 +1,16 @@
 # Speech Record Analysis
 
-Networked Raspberry Pi speech-recording and analysis system for multi-mic experiments. Each Pi runs microphone processes that capture audio, compute speech features, stream live OSC telemetry, and save session data locally. A separate control computer starts/stops recording sessions, verifies that the expected rig is alive, and optionally shows the live browser monitor.
+Networked Raspberry Pi speech-recording and analysis system for HCI data collection. Each Pi runs one or more microphone processes that capture audio, compute speech features, stream live OSC telemetry to a main computer, and save session data in real time (later collected by the main computer). During runtime, the control computer starts/stops recording sessions, verifies that the expected rig is alive, and optionally shows a live browser monitor. File retrieval from the RPi in the network is also automated (ssh).
 
 The README explains the intended system model first. Detailed procedures live in the linked documents.
 
 ## 1. What The System Does
 
 The system is designed for a small fleet of Raspberry Pis on the same network as a control computer. In the current lab setup, six Pis can each run two microphone processes, giving up to twelve live recording processes.
+
+The fleet is declared in two separate files. [devices.csv](devices.csv) lists which Pis get installed and updated during deployment. [start_recording_session.yaml](start_recording_session.yaml) lists which Pi/mic processes are expected for a specific recording session. Keeping them separate makes it possible to deploy the full fleet but record with a subset.
+
+At runtime the system is broadcast-friendly: any additional `strip_monitor.py` process on the network — running on a spare Pi, a laptop, or any other host — announces itself via `/hello` heartbeats, appears in the live monitor, and can receive broadcast control commands, even if it is not listed in either file. Only the preflight `test` command is strict about the declared list (see Section 3).
 
 Each microphone process can provide:
 
@@ -17,9 +21,9 @@ Each microphone process can provide:
 - OSC telemetry for live monitoring
 - Pi-local CSV logging for later analysis
 
-Saved data in the current workflow includes feature-specific CSV files: `_opensmile_lld.csv`, `_vad.csv`, and `_emotion.csv`. These files share a simple alignable timing prefix (`frameTime`, `unix_start`, `unix_end`). For the logging, saving, and collection workflow, see [docs/central_collection.md](docs/central_collection.md). For openSMILE details, see [docs/openSmile_information.md](docs/openSmile_information.md).
+Saved data in the current workflow includes feature-specific CSV files: `_opensmile_lld.csv`, `_vad.csv`, and `_emotion.csv`. These files share a simple alignable timing prefix (`frameTime`, `unix_start`, `unix_end`). For the logging, saving, and collection workflow and full CSV schema, see [docs/Data_Collection_and_CSV_Format.md](docs/Data_Collection_and_CSV_Format.md). For openSMILE details, see [docs/openSmile_information.md](docs/openSmile_information.md).
 
-Later documentation should add dedicated VAD and emotion-output references, similar to the existing openSMILE notes.
+[TO DO: add documentation files about VAD and emotion-output, similar to the existing openSMILE notes.]
 
 ## 2. System Architecture
 
@@ -46,43 +50,49 @@ flowchart LR
 
 Important roles:
 
-- Raspberry Pis run `strip_monitor.py` microphone processes.
+- Raspberry Pis run `strip_monitor.py` microphone processes (one per microphone).
 - The control computer runs `speech_control.py` commands and, optionally, `./run_web.sh` for the browser GUI bridge.
 - The browser GUI is a monitor/control surface; it is not the audio-analysis engine.
-- Recording results are saved on the Pis, normally under each Pi's configured `log_data/` directory, unless copied back later.
+- Recording results are saved on the Pis, normally under each Pi's configured `log_data/` directory, and can be copied to the main computer later (real time, direct collection on the main computer through OSC is possible but not recommended).
 
 For script responsibilities, see [docs/script_map.md](docs/script_map.md).
 
-## 3. Normal Operation After Deployment
+## 3. QUICK GUIDE (Normal Operation After Deployment)
 
-Normal operation assumes the system has already been deployed.
-
-In that deployed state:
-
-- Each Pi has the project installed at `/home/pi/SPEECH_RECORD_ANALYSIS`.
-- Each Pi has a Python `venv/`, local models, and real microphone config files.
-- systemd user services start the microphone processes automatically at boot.
-- Operators do not manually launch the mic processes on each Pi.
-- The operator works from the control computer.
-
-Typical operator flow on the control computer:
+Assumes deployment is done and both mic services autostart on each Pi. Every command below runs from the Mac in the repo root.
 
 ```bash
-# 1. Verify that the expected Pi/mic processes are alive and healthy.
+# All the operator commands live in speech_control.py. It has a shebang and is
+# executable, so `./speech_control.py ...` is equivalent to `python speech_control.py ...`.
+
+# 1. Preflight the expected rig.
+#    `test` sends /ctrl/query_state to every Pi/mic listed in the session YAML
+#    and reports OK / ERROR / TIMEOUT per process. Run this before every session.
 python speech_control.py test start_recording_session.yaml
 
-# 2. Start the recording session if the test passes.
+# 2. Start a recording session.
+#    `start-recording-session` first runs the same preflight, then (only if it
+#    passes) sends the startup commands declared in the YAML: vad_on / prosody_on /
+#    emotion_on|off / osc_start / osc_send_hz / log_start.
 python speech_control.py start-recording-session start_recording_session.yaml
 
-# 3. Pause/resume if needed.
+# 3. Pause / resume during the run.
 python speech_control.py broadcast --session start_recording_session.yaml log_pause
 python speech_control.py broadcast --session start_recording_session.yaml log_resume
 
-# 4. Save the run.
-python speech_control.py broadcast --session start_recording_session.yaml log_save_stop session_001.csv
+# 4. Save + pull files back to the Mac in one step.
+python save_and_pull_logs.py --session start_recording_session.yaml take_001
 ```
 
-For the full operator workflow, GUI option, dry runs, and Python integration examples, see [docs/operator_osc_control.md](docs/operator_osc_control.md).
+Optional live monitoring in the browser:
+
+```bash
+./run_web.sh --session start_recording_session.yaml   # → http://localhost:3000/
+```
+
+<!-- TODO: add a screenshot of the browser GUI showing the expected rig, live heartbeats, and a healthy recording session. -->
+
+**Canonical runtime guide: [docs/Runtime_Operation.md](docs/Runtime_Operation.md).** Covers pause/resume/discard, live monitoring, local one-machine tests, and runtime troubleshooting. For CSV/collection specifics: [docs/Data_Collection_and_CSV_Format.md](docs/Data_Collection_and_CSV_Format.md). For every OSC command and full session YAML: [docs/operator_osc_control.md](docs/operator_osc_control.md).
 
 ## 4. Configuration Files
 
@@ -123,19 +133,16 @@ Each deployed Pi should contain:
 
 At runtime, those services launch two `strip_monitor.py` processes, one per microphone. After autostart is enabled, do not run [START_AUDIO_PROCESSING.sh](START_AUDIO_PROCESSING.sh) manually on top of active services, because that can create duplicate processes.
 
-Canonical fleet deployment guide:
+**Canonical fleet deployment guide: [docs/Fleet_Deployment_Guide.md](docs/Fleet_Deployment_Guide.md).**
 
-- [docs/main_deployment.md](docs/main_deployment.md)
+The guide is split into four phase-specific documents, one per stage:
 
-That guide covers the full intended flow:
+1. [Bundle_Preparation_on_Builder_Pi.md](docs/Bundle_Preparation_on_Builder_Pi.md) — build `wheelhouse/` + `debs/` on an internet-connected builder Pi, pull to the Mac.
+2. [Test_Deployment_on_One_Pi.md](docs/Test_Deployment_on_One_Pi.md) — push the bundle to one fleet Pi and verify audio + OSC end-to-end.
+3. [Fleet_Deployment_via_SSH.md](docs/Fleet_Deployment_via_SSH.md) — roll the same bundle to all six Pis.
+4. [Autostart_Configuration_on_Fleet.md](docs/Autostart_Configuration_on_Fleet.md) — opt-in systemd user services, run **only** after Phases 1–3 pass.
 
-1. Build the offline wheelhouse on one internet-connected Pi.
-2. Copy the project bundle to all Pis over SSH.
-3. Run [install_from_bundle.sh](install_from_bundle.sh) on all Pis.
-4. Enable autostart services.
-5. Validate that the deployed mic processes respond.
-
-Autostart details are currently documented separately in [docs/pi_autostart_installation.md](docs/pi_autostart_installation.md). That file is useful as a systemd detail reference, but the main fleet deployment path should start from [docs/main_deployment.md](docs/main_deployment.md).
+Start with [Fleet_Deployment_Guide.md](docs/Fleet_Deployment_Guide.md); it explains why each phase exists and links out to the four detailed docs above.
 
 ### 5.2 Control Computer
 
@@ -175,6 +182,8 @@ Start the GUI bridge from the control computer when visual monitoring is useful:
 
 The GUI can show expected processes from [start_recording_session.yaml](start_recording_session.yaml) and live heartbeats from the Pis. Missing expected processes are shown as missing/red. This is useful before a recording session, but it is not required for headless command-line control.
 
+<!-- TODO: add a screenshot of the GUI's expected-vs-live panel highlighting a missing Pi in red. -->
+
 ### 5.3 Session YAML And Saved Results
 
 [start_recording_session.yaml](start_recording_session.yaml) defines the expected recording rig for one session. It describes:
@@ -190,108 +199,50 @@ Copying saved session data back from all Pis to the control computer is an impor
 
 ## 6. Manual Modes, Testing, And Troubleshooting
 
-This section is for bring-up and diagnostics, not normal deployed operation.
+Not part of normal operation. Use only for bring-up, single-Pi debugging, or laptop-only development.
 
-### 6.0 Fresh Local Reset Before Testing
-
-When testing on the control computer, use [fresh_start_local.sh](fresh_start_local.sh)
-as the canonical cleanup tool.
-
-Recommended reset sequence:
+Quick cheats:
 
 ```bash
-./fresh_start_local.sh --dry-run
+# Local one-machine test (Mac only, no fleet).
+# Uses config_local_mic1.yaml (system default input, so whatever mic macOS routes
+# to the terminal) and config_local_mic2.yaml (audio_device: 'MIC2', intentionally
+# absent on most laptops so the GUI shows an "expected but failing" second stream).
+# Emotion inference is disabled in the local configs for lighter startup.
+# To see which input devices your machine actually exposes:
+#     source venv/bin/activate && python strip_monitor.py --list-devices
+./START_LOCAL_TEST_PROCESSING.sh
+
+# Fresh reset of local mic + bridge processes before re-launching the GUI/receiver.
 ./fresh_start_local.sh
 ./run_web.sh --replace --session start_recording_session.yaml
-```
 
-Scope options when you do not want full cleanup:
+# On a Pi, manually run the two-mic pipeline (only if autostart is NOT enabled).
+# For example, targeting Pi #1 in the fleet (rpi5-11 at 192.168.0.11); the SSH
+# username `pi` is the default account on Raspberry Pi OS, not a hostname.
+ssh pi@192.168.0.11
+cd /home/pi/SPEECH_RECORD_ANALYSIS && ./START_AUDIO_PROCESSING.sh
 
-- `./fresh_start_local.sh --mics-only`: stop only local `strip_monitor.py` processes
-- `./fresh_start_local.sh --bridge-only`: stop only bridge/listener processes
-
-Compatibility note:
-
-- [stop_two_mics.sh](stop_two_mics.sh) now forwards to `./fresh_start_local.sh --mics-only`
-
-What this avoids:
-
-- hidden local heartbeat sources appearing as `local-*`
-- old bridge processes keeping ports `9000`/`8765`/`3000`
-- confusion where `--session` appears ignored because a stale bridge is still running
-
-### 6.1 Manual Pi Launch Before Autostart
-
-Use manual launch only before services are installed, or while debugging one Pi.
-
-On the Pi:
-
-```bash
-cd /home/pi/SPEECH_RECORD_ANALYSIS
-bash install_from_bundle.sh
-./START_AUDIO_PROCESSING.sh
-```
-
-Inspect logs:
-
-```bash
-tail -f logs/mic1.log logs/mic2.log
-```
-
-Stop manual processes:
-
-```bash
-./stop_two_mics.sh
-```
-
-### 6.2 Local One-Machine Test Mode
-
-The project has a separate local launcher for testing without the real Pi fleet:
-
-```bash
-./START_LOCAL_TEST_PROCESSING.sh
-```
-
-This uses [config_local_mic1.yaml](config_local_mic1.yaml) and [config_local_mic2.yaml](config_local_mic2.yaml), not the real Pi configs. These local configs are intentionally different and should not be confused with deployed runtime settings.
-
-For a compact runbook covering both laptop-only tests and control-laptop + one-Pi tests, see [docs/quick_test_laptop_one_pi.md](docs/quick_test_laptop_one_pi.md).
-
-### 6.3 Quick Diagnostics
-
-Useful checks:
-
-```bash
-# On a Pi or local test machine: inspect audio device availability.
+# Audio device diagnostic (Pi or Mac).
 python diag_audio.py
 
-# On the control computer: test the expected recording rig.
-python speech_control.py test start_recording_session.yaml
-```
-
-For systemd service logs on a Pi:
-
-```bash
+# systemd service logs on a Pi.
 journalctl --user -u speech-record-mic1.service -n 80 --no-pager
-journalctl --user -u speech-record-mic2.service -n 80 --no-pager
 ```
 
-For more runtime and troubleshooting details, see [docs/pi_runtime_processing.md](docs/pi_runtime_processing.md) and [docs/pi_autostart_installation.md](docs/pi_autostart_installation.md).
+Full detail (fresh-reset scopes, one-machine vs one-Pi recipes, GUI diagnostics, common failures + fixes) is in [docs/Runtime_Operation.md](docs/Runtime_Operation.md) and [docs/quick_test_laptop_one_pi.md](docs/quick_test_laptop_one_pi.md).
 
 ## 7. Detailed Documentation
 
-| Topic                                                 | File                                                                   |
-| ----------------------------------------------------- | ---------------------------------------------------------------------- |
-| Operator recording commands and Python integration    | [docs/operator_osc_control.md](docs/operator_osc_control.md)           |
-| Full Pi fleet deployment                              | [docs/main_deployment.md](docs/main_deployment.md)                     |
-| Pi runtime config, manual launch, and diagnostics     | [docs/pi_runtime_processing.md](docs/pi_runtime_processing.md)         |
-| Laptop-only and one-Pi quick test recipes             | [docs/quick_test_laptop_one_pi.md](docs/quick_test_laptop_one_pi.md)   |
-| systemd autostart details                             | [docs/pi_autostart_installation.md](docs/pi_autostart_installation.md) |
-| Script responsibilities and entrypoints               | [docs/script_map.md](docs/script_map.md)                               |
-| Logging, saving, and collecting data                  | [docs/central_collection.md](docs/central_collection.md)               |
-| openSMILE notes                                       | [docs/openSmile_information.md](docs/openSmile_information.md)         |
+Two authoritative guides own the two workflows. Everything else is a reference linked from those.
 
-## 8. Notes On Documentation Organization
-
-No file moves are required for current workflows. The README now acts as the system orientation document, while detailed procedures remain in separate workflow files.
-
-Future cleanup could rename [docs/main_deployment.md](docs/main_deployment.md) to something like `docs/deployment_pi_fleet.md` and fold [docs/pi_autostart_installation.md](docs/pi_autostart_installation.md) into it as an advanced systemd appendix. That should be done only after reviewing links and avoiding unnecessary disruption.
+| Topic                                          | File                                                                             |
+| ---------------------------------------------- | -------------------------------------------------------------------------------- |
+| Full Pi fleet deployment (4 phases)            | [docs/Fleet_Deployment_Guide.md](docs/Fleet_Deployment_Guide.md)                 |
+| Runtime operation, sessions, monitoring, tests | [docs/Runtime_Operation.md](docs/Runtime_Operation.md)                           |
+| Data collection protocol + CSV file schema     | [docs/Data_Collection_and_CSV_Format.md](docs/Data_Collection_and_CSV_Format.md) |
+| Operator OSC commands + full session YAML      | [docs/operator_osc_control.md](docs/operator_osc_control.md)                     |
+| Per-Pi runtime config internals                | [docs/pi_runtime_processing.md](docs/pi_runtime_processing.md)                   |
+| Laptop-only and one-Pi test recipes            | [docs/quick_test_laptop_one_pi.md](docs/quick_test_laptop_one_pi.md)             |
+| Script responsibilities and entrypoints        | [docs/script_map.md](docs/script_map.md)                                         |
+| openSMILE column reference                     | [docs/openSmile_information.md](docs/openSmile_information.md)                   |

@@ -45,17 +45,52 @@ EOF
     exit 1
 fi
 
-required_packages=(
-    python3-venv
-    python3-pip
-    python3-dev
-    portaudio19-dev
-    libportaudio2
-    libsndfile1
-    ffmpeg
-    git
-    build-essential
-)
+# --- Offline install of system .deb packages from ./debs/ (if present) --------
+# The fleet Pis have no internet. debs/ carries every OS-level package (with
+# transitive deps) that prepare_debs.sh downloaded on the builder Pi.
+#
+#   - `apt install ./file.deb` (with the leading `./`) treats file paths as
+#     local packages and resolves inter-package dependencies across them.
+#   - `--no-download` forbids apt from hitting the network; a missing dep fails
+#     loudly and points at an incomplete bundle instead of silently silently
+#     stalling on a DNS timeout.
+#   - Skipped entirely if ./debs/ is empty, so first-time builder Pis or Pis
+#     that already have all system packages continue to work.
+DEBS_DIR="$SCRIPT_DIR/debs"
+if compgen -G "$DEBS_DIR/*.deb" > /dev/null; then
+    echo "==> Installing system packages from bundle ($DEBS_DIR/*.deb)"
+    sudo apt-get install -y --no-download "$DEBS_DIR"/*.deb
+else
+    echo "==> No debs/ bundle found; assuming apt packages are already installed"
+fi
+# ------------------------------------------------------------------------------
+
+# Load required-package list from requirements-apt.txt (single source of truth,
+# also consumed by prepare_debs.sh). Fall back to the embedded list if the file
+# is absent (older checkouts).
+REQUIREMENTS_APT="$SCRIPT_DIR/requirements-apt.txt"
+required_packages=()
+if [ -f "$REQUIREMENTS_APT" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        pkg="${line%%#*}"
+        pkg="${pkg// /}"
+        pkg="${pkg//$'\t'/}"
+        [ -z "$pkg" ] && continue
+        required_packages+=("$pkg")
+    done < "$REQUIREMENTS_APT"
+else
+    required_packages=(
+        python3-venv
+        python3-pip
+        python3-dev
+        portaudio19-dev
+        libportaudio2
+        libsndfile1
+        ffmpeg
+        git
+        build-essential
+    )
+fi
 
 if command -v dpkg >/dev/null 2>&1; then
     for package in "${required_packages[@]}"; do
@@ -65,13 +100,18 @@ if command -v dpkg >/dev/null 2>&1; then
     done
 
     if [ "${#system_missing[@]}" -gt 0 ]; then
-        echo "ERROR: this Pi is missing required system packages:" >&2
+        echo "ERROR: this Pi is still missing required system packages after the debs/ install step:" >&2
         printf '  - %s\n' "${system_missing[@]}" >&2
         cat >&2 <<'EOF'
 
-The prepared USB bundle includes Python wheels and models, but not apt packages.
-Install these packages while the Pi has internet access, or use a Pi image that
-already includes them, then run this script again.
+The debs/ bundle appears incomplete for this Pi.
+On the builder Pi (with internet), regenerate the bundle:
+    ./prepare_debs.sh
+Then re-pull debs/ to the Mac and re-run the fleet deploy.
+
+If this Pi was never meant to receive a debs/ bundle (for example a builder Pi
+with internet), install the packages manually with:
+    sudo apt-get install -y $(cat requirements-apt.txt 2>/dev/null | sed 's/#.*//' | tr '\n' ' ')
 
 EOF
         exit 1

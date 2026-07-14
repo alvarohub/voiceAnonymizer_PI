@@ -14,6 +14,9 @@ models/*
 wheelhouse/
 .wheelhouse-venv/
 
+# Offline system .deb bundle for USB installs (large, platform-specific)
+debs/
+
 # Runtime output
 log_data/
 output/

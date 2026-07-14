@@ -124,7 +124,7 @@ For the full command workflow (test/start/pause/resume/save/discard), use:
 
 For central CSV capture, Pi-local logs, timestamps, and feature meanings, use:
 
-- [central_collection.md](central_collection.md)
+- [Data_Collection_and_CSV_Format.md](Data_Collection_and_CSV_Format.md)
 
 ## 8. Diagnostics
 

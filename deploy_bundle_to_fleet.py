@@ -230,11 +230,17 @@ def main() -> int:
             "--exclude",
             ".git/",
             "--exclude",
+            ".venv/",
+            "--exclude",
             "venv/",
             "--exclude",
             ".wheelhouse-venv/",
             "--exclude",
             "__pycache__/",
+            "--exclude",
+            "receiver/node_modules/",
+            "--exclude",
+            "log_data/",
         ]
     )
 

@@ -172,6 +172,8 @@ Expected: at least two USB audio input devices whose names match the ones refere
 
 If a mic is missing, unplug/replug the USB cable and re-run. If the names differ from the configs, update the `audio_device` field in the two YAMLs before continuing — the launcher will otherwise fail to open the stream.
 
+_(Note on `config_local_mic_.yaml`: The `local`configs are used only when testing the system completely on your Mac/laptop without a Pi. On the real fleet Pis, the system always expects and uses`config_mic1.yaml`and`config_mic2.yaml`.)\*
+
 ## 4. Run The Mic Pipeline Manually
 
 Still on the Pi, launch the standard two-mic runtime **without** autostart:
@@ -179,6 +181,8 @@ Still on the Pi, launch the standard two-mic runtime **without** autostart:
 ```bash
 ./START_AUDIO_PROCESSING.sh
 ```
+
+_(If you only want to test a single microphone rather than both, you can bypass this script and launch one manually: `source venv/bin/activate` followed by `python strip_monitor.py --config config_mic1.yaml --features-config config_features.yaml`)_
 
 Expected:
 

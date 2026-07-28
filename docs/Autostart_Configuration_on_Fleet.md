@@ -91,30 +91,47 @@ Within a few seconds after the Pi has booted, `rpi5-11` should appear in the bro
 
 ## 4. Verifying And Debugging
 
-### 4.1 Per-Pi status
+### 4.1 Check overall status from the Mac
 
-SSH into a Pi and check the services:
+You can use the deployment status script on your Mac to check if autostart is running correctly across the fleet without SSHing in manually:
 
 ```bash
-ssh pi@192.168.0.11
-systemctl --user status speech-record-mic1.service --no-pager
-systemctl --user status speech-record-mic2.service --no-pager
+python3 check_deployment_status.py --user pi --devices 1-6
+```
+(Look for `OK` in the `AUTOCFG` and `AUTORUN` columns).
+
+### 4.2 Check systemd status directly (SSH or on the Pi)
+
+If you are already SSH'd into a Pi (or on its local terminal), you can check the exact systemd status:
+
+```bash
+systemctl --user status speech-record-mic1.service speech-record-mic2.service --no-pager
+```
+
+To run this straight from the Mac without opening an interactive SSH session:
+```bash
+ssh pi@192.168.0.11 "systemctl --user status speech-record-mic1.service speech-record-mic2.service --no-pager"
 ```
 
 `active (running)` is what you want. `failed` or `activating (auto-restart)` means the process keeps crashing.
 
-### 4.2 Logs
+### 4.3 Look at live logs (Journalctl)
 
-Recent log output for a mic service:
+If you want to watch the real-time output stream to see if errors are happening, view the systemd journal.
 
+From the Pi:
 ```bash
 journalctl --user -u speech-record-mic1.service -n 200 --no-pager
 ```
 
-Follow live:
-
+To follow live from the Pi:
 ```bash
 journalctl --user -u speech-record-mic1.service -f
+```
+
+To follow live directly from the Mac:
+```bash
+ssh pi@192.168.0.11 "journalctl --user -u speech-record-mic1.service -f"
 ```
 
 Common issues:

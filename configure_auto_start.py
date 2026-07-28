@@ -335,12 +335,13 @@ def _configure_one(pi: PiConfig, args: argparse.Namespace) -> tuple[bool, list[s
         if not args.dry_run:
             ssh = _connect_ssh(host, args.user, args.password, args.port)
 
-        unit_dir = "~/.config/systemd/user"
-        _remote_bash(ssh, host, args.user, f"mkdir -p {unit_dir}", args.dry_run, log)
+        # Paramiko SFTP does not expand ~ automatically. Expand it to /home/<user>
+        unit_dir_sftp = f"/home/{args.user}/.config/systemd/user"
+        _remote_bash(ssh, host, args.user, f"mkdir -p ~/.config/systemd/user", args.dry_run, log)
 
         for mic_id in mics:
             unit_name = _unit_name(mic_id)
-            unit_path = f"{unit_dir}/{unit_name}"
+            unit_path = f"{unit_dir_sftp}/{unit_name}"
             unit_content = _build_unit(args.project_dir, mic_id, args.restart_sec)
             _write_remote_file(ssh, host, args.user, unit_path, unit_content, args.dry_run, log)
 

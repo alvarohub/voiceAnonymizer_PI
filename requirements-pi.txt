@@ -18,8 +18,10 @@ PyYAML
 
 # emotion2vec via FunASR
 funasr
-torch
-torchaudio
+# IMPORTANT: keep these pinned as a tested pair on Debian 13 + Python 3.13
+# to avoid resolver conflicts in offline wheelhouse installs.
+torch==2.11.0
+torchaudio==2.11.0
 modelscope         # model hub used by funasr
 
 # Voice Activity Detection

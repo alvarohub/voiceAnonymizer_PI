@@ -42,9 +42,63 @@ One command from the Mac (from the repo root) does both the rsync and the remote
 
 What it does, in order:
 
-1. Reads [../devices.csv](../devices.csv), picks device index 1 (currently `rpi5-11` / `192.168.0.11`).
+1. Reads [../devices.csv](../devices.csv), picks **row/index `1`** (currently `rpi5-11` / `192.168.0.11`). In other words, `--devices 1` does **not** mean "first reachable Pi on the network"; it means "the device whose `index` column is `1` in `devices.csv`".
 2. `rsync -az --delete` your local repo (minus `.git/`, `venv/`, `.wheelhouse-venv/`, `__pycache__/`) to `/home/pi/SPEECH_RECORD_ANALYSIS/` on that Pi.
 3. Runs `install_from_bundle.sh` remotely over SSH.
+
+### 2.1 One-off test Pi that is not part of the fleet
+
+If you want to test on a completely different Pi without touching [../devices.csv](../devices.csv), use the direct target mode:
+
+```bash
+./deploy_bundle_to_fleet.py --user pi --host 192.168.0.99 --hostname test-pi
+```
+
+What this does:
+
+1. Bypasses `devices.csv` entirely.
+2. Targets exactly `pi@192.168.0.99`.
+3. Uses `test-pi` only as a human-readable label in logs and the final summary.
+
+Important: `--user` and `--dest-dir` are independent.
+
+- `--user` = the Linux account used for SSH (the part before the `@` in `ssh pi@192.168.0.99`).
+- `--dest-dir` = the project path on the remote Pi where the bundle will be copied and where `install_from_bundle.sh` will be run.
+
+The default `--dest-dir` is:
+
+```bash
+/home/pi/SPEECH_RECORD_ANALYSIS
+```
+
+So the simple command above is correct only if the remote account is `pi` and the project should live in `/home/pi/SPEECH_RECORD_ANALYSIS`.
+
+If the remote account is different, change `--dest-dir` to match that user's home. For example, for a one-off Pi reached as `admin@192.168.0.22`:
+
+```bash
+./deploy_bundle_to_fleet.py \
+  --user admin \
+  --host 192.168.0.22 \
+  --dest-dir /home/admin/SPEECH_RECORD_ANALYSIS
+```
+
+In plain language, that means:
+
+1. SSH as `admin`.
+2. Copy the bundle into `/home/admin/SPEECH_RECORD_ANALYSIS` on that Pi.
+3. Run `install_from_bundle.sh` from inside that folder.
+
+If you omit `--hostname`, the script uses the `--host` value itself as the label:
+
+```bash
+./deploy_bundle_to_fleet.py --user pi --host 192.168.0.99
+```
+
+You can also override the display index in logs if you want:
+
+```bash
+./deploy_bundle_to_fleet.py --user pi --host 192.168.0.99 --hostname test-pi --index 99
+```
 
 The `install_from_bundle.sh` step:
 

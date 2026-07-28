@@ -111,6 +111,31 @@ def _parse_args() -> argparse.Namespace:
         description="Sync bundle and run install_from_bundle.sh on Pi fleet (Phase 2 + 3).",
     )
     parser.add_argument(
+        "--host",
+        default="",
+        help=(
+            "Direct one-off target IP or hostname. If set, bypasses devices.csv and "
+            "deploys to exactly this host."
+        ),
+    )
+    parser.add_argument(
+        "--hostname",
+        default="",
+        help=(
+            "Optional display name used together with --host for logs and summaries "
+            "(default: same value as --host)."
+        ),
+    )
+    parser.add_argument(
+        "--index",
+        type=int,
+        default=1,
+        help=(
+            "Optional display index used together with --host in logs and summaries "
+            "(default: 1)."
+        ),
+    )
+    parser.add_argument(
         "--devices-file",
         default="devices.csv",
         help="Devices CSV with columns index,hostname,ip (default: devices.csv).",
@@ -155,38 +180,50 @@ def main() -> int:
     args = _parse_args()
 
     source_dir = Path(args.source_dir).resolve()
-    devices_file = Path(args.devices_file)
-    if not devices_file.is_absolute():
-        devices_file = (source_dir / devices_file).resolve()
-
-    try:
-        all_devices = _load_devices(devices_file)
-    except Exception as exc:  # noqa: BLE001 - user-facing input errors
-        print(f"ERROR: {exc}", file=sys.stderr)
+    using_direct_host = bool(args.host.strip())
+    if using_direct_host and args.devices is not None:
+        print("ERROR: --host cannot be combined with --devices. Use one mode or the other.", file=sys.stderr)
         return 2
 
-    all_indices = [d.index for d in all_devices]
-    try:
-        selected_indices = _parse_indices(args.devices, all_indices)
-    except Exception as exc:  # noqa: BLE001
-        print(f"ERROR parsing --devices: {exc}", file=sys.stderr)
-        return 2
+    if using_direct_host:
+        host = args.host.strip()
+        hostname = (args.hostname.strip() or host)
+        selected = [Device(index=args.index, hostname=hostname, ip=host)]
+        selected_source = f"direct target --host {host}"
+    else:
+        devices_file = Path(args.devices_file)
+        if not devices_file.is_absolute():
+            devices_file = (source_dir / devices_file).resolve()
 
-    by_index = {d.index: d for d in all_devices}
-    selected: list[Device] = []
-    for idx in selected_indices:
-        device = by_index.get(idx)
-        if device is None:
-            valid = ", ".join(str(i) for i in all_indices)
-            print(f"ERROR: unknown device index {idx}. Known indices: {valid}", file=sys.stderr)
+        try:
+            all_devices = _load_devices(devices_file)
+        except Exception as exc:  # noqa: BLE001 - user-facing input errors
+            print(f"ERROR: {exc}", file=sys.stderr)
             return 2
-        selected.append(device)
+
+        all_indices = [d.index for d in all_devices]
+        try:
+            selected_indices = _parse_indices(args.devices, all_indices)
+        except Exception as exc:  # noqa: BLE001
+            print(f"ERROR parsing --devices: {exc}", file=sys.stderr)
+            return 2
+
+        by_index = {d.index: d for d in all_devices}
+        selected = []
+        for idx in selected_indices:
+            device = by_index.get(idx)
+            if device is None:
+                valid = ", ".join(str(i) for i in all_indices)
+                print(f"ERROR: unknown device index {idx}. Known indices: {valid}", file=sys.stderr)
+                return 2
+            selected.append(device)
+        selected_source = str(devices_file)
 
     if not selected:
         print("ERROR: no devices selected", file=sys.stderr)
         return 2
 
-    print(f"Selected devices from {devices_file}:")
+    print(f"Selected devices from {selected_source}:")
     for device in selected:
         print(f"  - {device.index}: {device.host} ({device.hostname})")
     print("")

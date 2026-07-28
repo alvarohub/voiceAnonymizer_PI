@@ -54,32 +54,39 @@ You will be prompted for the Pi password once per host, then never again from th
 
 If you cannot use `ssh-copy-id`, you can install `sshpass` (`brew install hudochenkov/sshpass/sshpass` on macOS) and prefix commands with `SSHPASS=1234 sshpass -e ...`. Prefer the key method.
 
-## 4. Deploy To The Whole Fleet
+## 4. Deploy To The Whole Fleet (Independent Steps)
 
-Two equivalent commands. Pick one.
+Run Phase 2 and Phase 3 as separate commands so progress/failures are explicit.
 
-### 4a. Direct call
+Terminology note: there is no separate operator "setup" phase command. `setup_pi.sh` runs internally during install (`install_from_bundle.sh`).
+
+### 4a. Copy bundle only (Phase 2)
 
 ```bash
-./deploy_bundle_to_fleet.py --user pi --devices 1-6
+python3 copy_bundle_to_targets.py --user pi --devices 1-6
 ```
 
-### 4b. Lab-defaults wrapper (skip autostart on purpose)
+### 4b. Install from bundle only (Phase 3)
+
+```bash
+python3 install_bundle_on_targets.py --user pi --devices 1-6
+```
+
+Optional wrapper for lab defaults (still independent internally if you run steps yourself):
 
 ```bash
 ./deploy_lab_defaults.sh --skip-autostart
 ```
 
-The wrapper hard-codes the lab defaults (`--user pi`, `--devices 1-6`, wheelhouse source, etc.) so you don't have to remember them. `--skip-autostart` keeps Phase 4 out of this batch.
+What each phase does:
 
-What happens for each Pi, in order:
+1. Sync phase: `rsync -az --delete` bundle to `/home/pi/SPEECH_RECORD_ANALYSIS/` on each Pi.
+2. Install phase: remote `install_from_bundle.sh`:
 
-1. `rsync -az --delete` bundle to `/home/pi/SPEECH_RECORD_ANALYSIS/` on the Pi.
-2. Remote `install_from_bundle.sh`:
-   - `apt install --no-download ./debs/*.deb` (offline, from bundle).
-   - `setup_pi.sh` with `SKIP_APT=1` builds `venv/` and pip-installs everything from `./wheelhouse/`.
+- `apt install --no-download ./debs/*.deb` (offline, from bundle)
+- `setup_pi.sh` with `SKIP_APT=1` builds `venv/` and pip-installs everything from `./wheelhouse/`
 
-Expected end-of-run summary:
+Expected end-of-run summary for install phase:
 
 ```
 Summary:
@@ -91,41 +98,50 @@ Summary:
 
 Duration: on gigabit Ethernet with parallel `rsync` and warm caches, the whole fleet takes 5–15 minutes end to end. First-ever deploy is dominated by the ~3.5 GB wheelhouse transfer per Pi.
 
-## 5. Post-Deploy Sanity On Each Pi
-
-Deploy success from the Mac only proves rsync + installer both returned zero. The processes are **not** yet running. Verify a few Pis by hand before Phase 4:
+Autostart remains a separate explicit command (Phase 4):
 
 ```bash
-# On the Mac
-for i in 1 2 3 4 5 6; do
-    ip="192.168.0.1$((i + 0))"        # 11..16
-    echo "=== $ip ==="
-    ssh pi@$ip 'test -x /home/pi/SPEECH_RECORD_ANALYSIS/venv/bin/python && echo venv ok; ls /home/pi/SPEECH_RECORD_ANALYSIS/models/iic/emotion2vec_plus_base/model.pt 2>/dev/null && echo model ok'
-done
+python3 autostart_config_to_targets.py --user pi --devices 1-6
 ```
 
-Every Pi should print `venv ok` and `model ok`. If one does not, deploy that one alone with `--devices <N>` and inspect the install output.
+## 5. Post-Deploy Sanity On Each Pi
+
+Deploy success from the Mac only proves rsync + installer both returned zero. The processes are **not** yet running. Use the read-only status helper before Phase 4:
+
+```bash
+python3 check_deployment_status.py --user pi --devices 1-6
+```
+
+Interpretation:
+
+- `SYNC=OK` means bundle files are present.
+- `INSTALL=OK` means venv Python exists.
+- `AUTOCFG=NO` / `AUTORUN=NO` is expected before Phase 4.
+
+If one Pi is behind, rerun just that phase for only that index.
 
 Optionally spot-check the mic pipeline on one Pi you did **not** already validate in Phase 2 — same commands as [Phase 2 § Run the mic pipeline manually](Test_Deployment_on_One_Pi.md#4-run-the-mic-pipeline-manually).
 
 ## 6. Handling Partial Failures
 
-`deploy_bundle_to_fleet.py` reports which Pis succeeded and which failed separately, and continues past a single failure so one dead Pi does not block the other five. To re-target only the ones that failed:
+`copy_bundle_to_targets.py` and `install_bundle_on_targets.py` report which Pis succeeded and which failed separately, and continue past a single failure so one dead Pi does not block the other five. To re-target only the ones that failed:
 
 ```bash
-./deploy_bundle_to_fleet.py --user pi --devices 2,5
+python3 copy_bundle_to_targets.py --user pi --devices 2 5
+python3 install_bundle_on_targets.py --user pi --devices 2 5
 ```
 
 For a `--no-delete` mode (skip `rsync --delete`, useful if a Pi has extra local data you must not wipe):
 
 ```bash
-./deploy_bundle_to_fleet.py --user pi --devices 1-6 --no-delete
+python3 copy_bundle_to_targets.py --user pi --devices 1-6 --no-delete
 ```
 
 For a dry-run that prints the exact `rsync` and `ssh` commands without executing:
 
 ```bash
-./deploy_bundle_to_fleet.py --user pi --devices 1-6 --dry-run
+python3 copy_bundle_to_targets.py --user pi --devices 1-6 --dry-run
+python3 install_bundle_on_targets.py --user pi --devices 1-6 --dry-run
 ```
 
 ## 7. What Is Ready After Phase 3

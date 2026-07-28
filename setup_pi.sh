@@ -50,5 +50,7 @@ fi
 
 echo
 echo "Done. To use:"
+echo "    if needed, SSH into this Pi first"
+echo "    cd $SCRIPT_DIR"
 echo "    source venv/bin/activate"
 echo "    python audio_analysis_background.py --list-devices"

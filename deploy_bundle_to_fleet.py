@@ -102,13 +102,32 @@ def _run(command: list[str], dry_run: bool) -> tuple[bool, str]:
     return False, detail
 
 
+def _run_interactive(command: list[str], dry_run: bool) -> tuple[bool, str]:
+    rendered = shlex.join(command)
+    print(f"$ {rendered}")
+    if dry_run:
+        return True, ""
+
+    try:
+        proc = subprocess.run(command, check=False)
+    except FileNotFoundError as exc:
+        return False, f"Command not found: {exc}"
+
+    if proc.returncode == 0:
+        return True, ""
+    return False, f"exit {proc.returncode}"
+
+
 def _has_wheels(wheelhouse_dir: Path) -> bool:
     return any(wheelhouse_dir.glob("*.whl"))
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Sync bundle and run install_from_bundle.sh on Pi fleet (Phase 2 + 3).",
+        description=(
+            "Deploy helper for Phase 2 (sync) and Phase 3 (install). "
+            "Default runs both; use --sync-only or --install-only for independent steps."
+        ),
     )
     parser.add_argument(
         "--host",
@@ -172,12 +191,33 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not pass --delete to rsync.",
     )
+    parser.add_argument(
+        "--interactive-install",
+        action="store_true",
+        help=(
+            "Run remote install in interactive mode with SSH TTY allocation. "
+            "Use when sudo on the Pi requires password prompts."
+        ),
+    )
+    phase_mode = parser.add_mutually_exclusive_group()
+    phase_mode.add_argument(
+        "--sync-only",
+        action="store_true",
+        help="Run Phase 2 only: rsync bundle to target(s), do not run install.",
+    )
+    phase_mode.add_argument(
+        "--install-only",
+        action="store_true",
+        help="Run Phase 3 only: run remote install_from_bundle.sh, no rsync.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print commands without executing them.")
     return parser.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
+    run_sync = not args.install_only
+    run_install = not args.sync_only
 
     source_dir = Path(args.source_dir).resolve()
     using_direct_host = bool(args.host.strip())
@@ -229,7 +269,7 @@ def main() -> int:
     print("")
 
     wheelhouse_dir = source_dir / "wheelhouse"
-    if args.pull_wheelhouse:
+    if run_sync and args.pull_wheelhouse:
         pull_cmd = ["rsync", "-az", args.pull_wheelhouse, str(wheelhouse_dir) + "/"]
         print("==> Pulling wheelhouse")
         ok, detail = _run(pull_cmd, args.dry_run)
@@ -238,24 +278,25 @@ def main() -> int:
             return 1
         print("")
 
-    required_local = [
-        source_dir / "models" / "iic" / "emotion2vec_plus_base" / "model.pt",
-        source_dir / "models" / "silero-vad" / "hubconf.py",
-    ]
-    missing_local = [str(path) for path in required_local if not path.exists()]
-    if missing_local:
-        print("ERROR: missing required local bundle files:", file=sys.stderr)
-        for path in missing_local:
-            print(f"  - {path}", file=sys.stderr)
-        return 2
+    if run_sync:
+        required_local = [
+            source_dir / "models" / "iic" / "emotion2vec_plus_base" / "model.pt",
+            source_dir / "models" / "silero-vad" / "hubconf.py",
+        ]
+        missing_local = [str(path) for path in required_local if not path.exists()]
+        if missing_local:
+            print("ERROR: missing required local bundle files:", file=sys.stderr)
+            for path in missing_local:
+                print(f"  - {path}", file=sys.stderr)
+            return 2
 
-    if not args.dry_run and not _has_wheels(wheelhouse_dir):
-        print(
-            f"ERROR: no wheel files found in {wheelhouse_dir}. "
-            "Run prepare_wheelhouse.sh first or use --pull-wheelhouse.",
-            file=sys.stderr,
-        )
-        return 2
+        if not args.dry_run and not _has_wheels(wheelhouse_dir):
+            print(
+                f"ERROR: no wheel files found in {wheelhouse_dir}. "
+                "Run prepare_wheelhouse.sh first or use --pull-wheelhouse.",
+                file=sys.stderr,
+            )
+            return 2
 
     sync_failed: list[Device] = []
     install_failed: list[Device] = []
@@ -281,36 +322,48 @@ def main() -> int:
         ]
     )
 
-    print("==> Phase 2: Sync bundle to Pis")
-    for device in selected:
-        print(f"[{device.index}:{device.host}] syncing")
-        sync_cmd = [
-            *rsync_flags,
-            str(source_dir) + "/",
-            f"{args.user}@{device.host}:{args.dest_dir}/",
-        ]
-        ok, detail = _run(sync_cmd, args.dry_run)
-        if not ok:
-            print(f"[{device.index}:{device.host}] SYNC FAILED: {detail}", file=sys.stderr)
-            sync_failed.append(device)
+    if run_sync:
+        print("==> Phase 2: Sync bundle to Pis")
+        for device in selected:
+            print(f"[{device.index}:{device.host}] syncing")
+            sync_cmd = [
+                *rsync_flags,
+                str(source_dir) + "/",
+                f"{args.user}@{device.host}:{args.dest_dir}/",
+            ]
+            ok, detail = _run(sync_cmd, args.dry_run)
+            if not ok:
+                print(f"[{device.index}:{device.host}] SYNC FAILED: {detail}", file=sys.stderr)
+                sync_failed.append(device)
+    else:
+        print("==> Phase 2: Sync skipped (--install-only)")
     print("")
 
-    print("==> Phase 3: Remote install_from_bundle.sh")
-    for device in selected:
-        if device in sync_failed:
-            print(f"[{device.index}:{device.host}] skipped install (sync failed)")
-            install_failed.append(device)
-            continue
+    if run_install:
+        print("==> Phase 3: Remote install_from_bundle.sh")
+        for device in selected:
+            if run_sync and device in sync_failed:
+                print(f"[{device.index}:{device.host}] skipped install (sync failed)")
+                install_failed.append(device)
+                continue
 
-        print(f"[{device.index}:{device.host}] installing")
-        remote = (
-            f"cd {shlex.quote(args.dest_dir)} && chmod +x *.sh && bash install_from_bundle.sh"
-        )
-        ssh_cmd = ["ssh", "-p", str(args.port), f"{args.user}@{device.host}", remote]
-        ok, detail = _run(ssh_cmd, args.dry_run)
-        if not ok:
-            print(f"[{device.index}:{device.host}] INSTALL FAILED: {detail}", file=sys.stderr)
-            install_failed.append(device)
+            print(f"[{device.index}:{device.host}] installing")
+            remote = (
+                f"cd {shlex.quote(args.dest_dir)} && chmod +x *.sh && bash install_from_bundle.sh"
+            )
+            ssh_cmd = ["ssh", "-p", str(args.port)]
+            if args.interactive_install:
+                ssh_cmd.append("-tt")
+            ssh_cmd.extend([f"{args.user}@{device.host}", remote])
+            if args.interactive_install:
+                ok, detail = _run_interactive(ssh_cmd, args.dry_run)
+            else:
+                ok, detail = _run(ssh_cmd, args.dry_run)
+            if not ok:
+                print(f"[{device.index}:{device.host}] INSTALL FAILED: {detail}", file=sys.stderr)
+                install_failed.append(device)
+    else:
+        print("==> Phase 3: Install skipped (--sync-only)")
     print("")
 
     sync_ok = [d for d in selected if d not in sync_failed]
@@ -322,12 +375,20 @@ def main() -> int:
         return ", ".join(f"{d.index}:{d.host}" for d in items)
 
     print("Summary:")
-    print(f"  Sync ok: {fmt(sync_ok)}")
-    print(f"  Sync failed: {fmt(sync_failed)}")
-    print(f"  Install ok: {fmt(install_ok)}")
-    print(f"  Install failed: {fmt(install_failed)}")
+    if run_sync:
+        print(f"  Sync ok: {fmt(sync_ok)}")
+        print(f"  Sync failed: {fmt(sync_failed)}")
+    else:
+        print("  Sync: skipped")
+    if run_install:
+        print(f"  Install ok: {fmt(install_ok)}")
+        print(f"  Install failed: {fmt(install_failed)}")
+    else:
+        print("  Install: skipped")
 
-    return 1 if sync_failed or install_failed else 0
+    sync_phase_failed = run_sync and bool(sync_failed)
+    install_phase_failed = run_install and bool(install_failed)
+    return 1 if sync_phase_failed or install_phase_failed else 0
 
 
 if __name__ == "__main__":

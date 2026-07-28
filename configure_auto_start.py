@@ -249,7 +249,35 @@ def _write_remote_file(
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Install and activate speech-record systemd user services on Pis listed in devices.csv.",
+        description=(
+            "Install and activate speech-record systemd user services. "
+            "By default targets devices.csv; use --host for direct one-off target mode."
+        ),
+    )
+    parser.add_argument(
+        "--host",
+        default="",
+        help=(
+            "Direct one-off target IP or hostname. If set, bypasses devices.csv and "
+            "configures exactly this host."
+        ),
+    )
+    parser.add_argument(
+        "--hostname",
+        default="",
+        help=(
+            "Optional display name used together with --host for logs and summaries "
+            "(default: same value as --host)."
+        ),
+    )
+    parser.add_argument(
+        "--index",
+        type=int,
+        default=1,
+        help=(
+            "Optional display index used together with --host in logs and summaries "
+            "(default: 1)."
+        ),
     )
     parser.add_argument(
         "--devices-file",
@@ -356,27 +384,38 @@ def _configure_one(pi: PiConfig, args: argparse.Namespace) -> tuple[bool, list[s
 
 def main() -> int:
     args = _parse_args()
+    using_direct_host = bool(args.host.strip())
+    if using_direct_host and args.devices is not None:
+        print("ERROR: --host cannot be combined with --devices. Use one mode or the other.", file=sys.stderr)
+        return 2
 
-    all_devices = _load_devices(args.devices_file)
-    all_indices = [d.index for d in all_devices]
-    selected_indices = _parse_indices(args.devices, all_indices)
-    by_index = {d.index: d for d in all_devices}
+    if using_direct_host:
+        host = args.host.strip()
+        hostname = args.hostname.strip() or host
+        pis = [PiConfig(index=args.index, hostname=hostname, ip=host, mic_ids={"1", "2"})]
+        selected_source = f"direct target --host {host}"
+    else:
+        all_devices = _load_devices(args.devices_file)
+        all_indices = [d.index for d in all_devices]
+        selected_indices = _parse_indices(args.devices, all_indices)
+        by_index = {d.index: d for d in all_devices}
 
-    pis: list[PiConfig] = []
-    for index in selected_indices:
-        item = by_index.get(index)
-        if item is None:
-            valid = ", ".join(str(i) for i in all_indices)
-            print(f"Unknown device index {index}. Known indices: {valid}", file=sys.stderr)
-            return 2
-        pis.append(item)
+        pis = []
+        for index in selected_indices:
+            item = by_index.get(index)
+            if item is None:
+                valid = ", ".join(str(i) for i in all_indices)
+                print(f"Unknown device index {index}. Known indices: {valid}", file=sys.stderr)
+                return 2
+            pis.append(item)
+        selected_source = args.devices_file
 
     if not pis:
         print("No matching devices found.", file=sys.stderr)
         return 2
 
     summary = ", ".join(f"{p.index}:{(p.ip or p.hostname)}" for p in pis)
-    print(f"Configuring {len(pis)} device(s) from {args.devices_file}: {summary}")
+    print(f"Configuring {len(pis)} device(s) from {selected_source}: {summary}")
     print("")
 
     print_lock = Lock()

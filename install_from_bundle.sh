@@ -59,7 +59,32 @@ fi
 DEBS_DIR="$SCRIPT_DIR/debs"
 if compgen -G "$DEBS_DIR/*.deb" > /dev/null; then
     echo "==> Installing system packages from bundle ($DEBS_DIR/*.deb)"
-    sudo apt-get install -y --no-download "$DEBS_DIR"/*.deb
+        # Fresh Pis may have an empty apt archive cache. Prime it from local debs
+        # so --no-download resolves dependency candidates fully offline.
+        echo "==> Priming apt cache from local debs"
+        sudo mkdir -p /var/cache/apt/archives/partial
+        sudo cp -f "$DEBS_DIR"/*.deb /var/cache/apt/archives/
+
+        if ! sudo apt-get install -y --no-download \
+                -o Dir::Cache::archives="/var/cache/apt/archives/" \
+                "$DEBS_DIR"/*.deb; then
+                cat >&2 <<'EOF'
+
+ERROR: offline apt install failed even after priming local deb cache.
+
+Most likely causes:
+    1) debs/ is still incomplete for this OS image
+    2) deb versions do not match this Pi's OS release
+
+Fix path:
+    - On builder Pi: ./prepare_debs.sh
+    - Pull updated debs/ to Mac
+    - Re-copy bundle to target Pi (Phase 2)
+    - Re-run install
+
+EOF
+                exit 1
+        fi
 else
     echo "==> No debs/ bundle found; assuming apt packages are already installed"
 fi
@@ -135,10 +160,13 @@ cat <<'EOF'
 Done.
 
 Next steps on this Pi:
-  1. source venv/bin/activate
-  2. python strip_monitor.py --list-devices
-    3. Confirm config_mic1.yaml and config_mic2.yaml match this Pi.
-  4. Confirm config_features.yaml matches the experiment feature/log plan.
-    5. Start audio processing: ./START_AUDIO_PROCESSING.sh
+    1. SSH into this Pi (if not already connected).
+    2. Go to the project folder, then activate the venv:
+             cd /home/admin/SPEECH_RECORD_ANALYSIS
+             source venv/bin/activate
+    3. python strip_monitor.py --list-devices
+    4. Confirm config_mic1.yaml and config_mic2.yaml match this Pi.
+    5. Confirm config_features.yaml matches the experiment feature/log plan.
+    6. Start audio processing: ./START_AUDIO_PROCESSING.sh
 
 EOF

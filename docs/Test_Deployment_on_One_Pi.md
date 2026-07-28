@@ -32,37 +32,53 @@ Expected: three `64 bytes from 192.168.0.11 ...` lines. If you see `Request time
 
 Do not continue until ping works. Everything below relies on SSH, which relies on IP reachability.
 
-## 2. Push The Bundle And Install
+## 2. Explicit Commands Used In This One-Pi Validation
 
-One command from the Mac (from the repo root) does both the rsync and the remote install:
+For one-Pi testing, use explicit scripts per phase:
+
+1. `copy_bundle_to_targets.py`
+2. `install_bundle_on_targets.py`
+3. `autostart_config_to_targets.py` (optional, only after manual tests pass)
+
+Terminology note: there is no separate operator "setup" phase command. `setup_pi.sh` is internal and is called by `install_from_bundle.sh` during the install step.
+
+### 2.1 Pi listed in devices.csv
+
+Copy bundle only (Phase 2):
 
 ```bash
-./deploy_bundle_to_fleet.py --user pi --devices 1
+python3 copy_bundle_to_targets.py --user pi --devices 1
 ```
 
-What it does, in order:
-
-1. Reads [../devices.csv](../devices.csv), picks **row/index `1`** (currently `rpi5-11` / `192.168.0.11`). In other words, `--devices 1` does **not** mean "first reachable Pi on the network"; it means "the device whose `index` column is `1` in `devices.csv`".
-2. `rsync -az --delete` your local repo (minus `.git/`, `venv/`, `.wheelhouse-venv/`, `__pycache__/`) to `/home/pi/SPEECH_RECORD_ANALYSIS/` on that Pi.
-3. Runs `install_from_bundle.sh` remotely over SSH.
-
-### 2.1 One-off test Pi that is not part of the fleet
-
-If you want to test on a completely different Pi without touching [../devices.csv](../devices.csv), use the direct target mode:
+Install from bundle only (Phase 3):
 
 ```bash
-./deploy_bundle_to_fleet.py --user pi --host 192.168.0.99 --hostname test-pi
+python3 install_bundle_on_targets.py --user pi --devices 1
+```
+
+### 2.2 One-off test Pi not in devices.csv (`--host` mode)
+
+Copy bundle only:
+
+```bash
+python3 copy_bundle_to_targets.py --user admin --host 192.168.0.22 --hostname emotionpi
+```
+
+Install from bundle only:
+
+```bash
+python3 install_bundle_on_targets.py --user admin --host 192.168.0.22 --hostname emotionpi
 ```
 
 What this does:
 
 1. Bypasses `devices.csv` entirely.
-2. Targets exactly `pi@192.168.0.99`.
-3. Uses `test-pi` only as a human-readable label in logs and the final summary.
+2. Targets exactly `admin@192.168.0.22`.
+3. Uses `emotionpi` only as a human-readable label in logs and the final summary.
 
 Important: `--user` and `--dest-dir` are independent.
 
-- `--user` = the Linux account used for SSH (the part before the `@` in `ssh pi@192.168.0.99`).
+- `--user` = the Linux account used for SSH (the part before the `@` in `ssh admin@192.168.0.22`).
 - `--dest-dir` = the project path on the remote Pi where the bundle will be copied and where `install_from_bundle.sh` will be run.
 
 The default `--dest-dir` is:
@@ -76,7 +92,16 @@ So the simple command above is correct only if the remote account is `pi` and th
 If the remote account is different, change `--dest-dir` to match that user's home. For example, for a one-off Pi reached as `admin@192.168.0.22`:
 
 ```bash
-./deploy_bundle_to_fleet.py \
+python3 copy_bundle_to_targets.py \
+  --user admin \
+  --host 192.168.0.22 \
+  --dest-dir /home/admin/SPEECH_RECORD_ANALYSIS
+```
+
+Then run install as a second command:
+
+```bash
+python3 install_bundle_on_targets.py \
   --user admin \
   --host 192.168.0.22 \
   --dest-dir /home/admin/SPEECH_RECORD_ANALYSIS
@@ -88,25 +113,15 @@ In plain language, that means:
 2. Copy the bundle into `/home/admin/SPEECH_RECORD_ANALYSIS` on that Pi.
 3. Run `install_from_bundle.sh` from inside that folder.
 
-If you omit `--hostname`, the script uses the `--host` value itself as the label:
+If you omit `--hostname`, the scripts use the `--host` value itself as the label.
 
-```bash
-./deploy_bundle_to_fleet.py --user pi --host 192.168.0.99
-```
-
-You can also override the display index in logs if you want:
-
-```bash
-./deploy_bundle_to_fleet.py --user pi --host 192.168.0.99 --hostname test-pi --index 99
-```
-
-The `install_from_bundle.sh` step:
+The `install_from_bundle.sh` step (Phase 3):
 
 - Checks the bundle looks complete (models, wheelhouse, debs).
 - Installs the `.deb`s from `./debs/*.deb` with `apt` in offline mode (no network access).
 - Calls `setup_pi.sh` with `SKIP_APT=1`, which builds `venv/` and installs every Python package from `./wheelhouse/` with `--no-index`.
 
-Expected end-of-run summary:
+Expected end-of-run summary for install phase:
 
 ```
 Summary:
@@ -117,6 +132,30 @@ Summary:
 ```
 
 If the run stops at password prompts, either use `ssh-copy-id` first (one-time, per Pi) or export `SSHPASS` and use `sshpass` — this is documented in [Fleet_Deployment_via_SSH.md § SSH keys](Fleet_Deployment_via_SSH.md#3-set-up-ssh-keys-recommended).
+
+### 2.3 Check phase status at any point
+
+Use the read-only status helper to see where this Pi is in the process:
+
+```bash
+python3 check_deployment_status.py --user pi --devices 1
+```
+
+For one-off host mode:
+
+```bash
+python3 check_deployment_status.py \
+  --user admin \
+  --host 192.168.0.22 \
+  --project-dir /home/admin/SPEECH_RECORD_ANALYSIS
+```
+
+The table reports per host:
+
+- `SYNC`: bundle files present (project dir, models, wheelhouse, debs)
+- `INSTALL`: venv python present
+- `AUTOCFG`: both user services enabled
+- `AUTORUN`: both user services active
 
 ## 3. Verify Audio Devices
 

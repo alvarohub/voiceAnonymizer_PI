@@ -144,7 +144,38 @@ The guide is split into four phase-specific documents, one per stage:
 
 Start with [Fleet_Deployment_Guide.md](docs/Fleet_Deployment_Guide.md); it explains why each phase exists and links out to the four detailed docs above.
 
-### 5.2 Control Computer
+### 5.2 Simple Deployment Flow (Recommended)
+
+Use explicit commands per phase.
+
+Terminology (important): there is no separate operator "setup" phase command.
+
+- `copy_bundle_to_targets.py` = Phase 2 (copy bundle)
+- `install_bundle_on_targets.py` = Phase 3 (install bundle)
+- `autostart_config_to_targets.py` = Phase 4 (enable services)
+- `setup_pi.sh` is an internal helper called by `install_from_bundle.sh` during Phase 3
+
+One-off Pi (non-fleet), using your current target:
+
+```bash
+python3 copy_bundle_to_targets.py --user admin --host 192.168.0.22 --dest-dir /home/admin/SPEECH_RECORD_ANALYSIS
+python3 install_bundle_on_targets.py --user admin --host 192.168.0.22 --dest-dir /home/admin/SPEECH_RECORD_ANALYSIS
+python3 check_deployment_status.py --user admin --host 192.168.0.22 --project-dir /home/admin/SPEECH_RECORD_ANALYSIS
+python3 autostart_config_to_targets.py --user admin --host 192.168.0.22 --project-dir /home/admin/SPEECH_RECORD_ANALYSIS
+```
+
+Fleet:
+
+```bash
+python3 copy_bundle_to_targets.py --user pi --devices 1-6
+python3 install_bundle_on_targets.py --user pi --devices 1-6
+python3 check_deployment_status.py --user pi --devices 1-6
+python3 autostart_config_to_targets.py --user pi --devices 1-6
+```
+
+`deploy_lab_defaults.sh` is just a convenience wrapper that runs those phases in sequence with lab defaults.
+
+### 5.3 Control Computer
 
 The control computer is the Mac/Linux machine used by the operator or deployer. It should have a local copy of this repository.
 
@@ -184,7 +215,7 @@ The GUI can show expected processes from [start_recording_session.yaml](start_re
 
 <!-- TODO: add a screenshot of the GUI's expected-vs-live panel highlighting a missing Pi in red. -->
 
-### 5.3 Session YAML And Saved Results
+### 5.4 Session YAML And Saved Results
 
 [start_recording_session.yaml](start_recording_session.yaml) defines the expected recording rig for one session. It describes:
 
@@ -196,6 +227,36 @@ The GUI can show expected processes from [start_recording_session.yaml](start_re
 When a session is saved, each Pi writes files locally under its configured `output_dir`, normally `log_data/`. The save command automatically adds the Pi/mic id to the filename so multiple processes do not overwrite one another.
 
 Copying saved session data back from all Pis to the control computer is an important follow-up workflow. A dedicated pull script or GUI action would be useful later; for now, use SSH/rsync or the existing log-gathering helpers described in the detailed docs.
+
+### 5.5 Uninstall And Clean Reinstall
+
+If you need a clean retest on a Pi, there are two options:
+
+1. Best reproducibility: reflash Raspberry Pi OS and redeploy from the same golden bundle.
+2. In-place uninstall: remove project artifacts/services and optionally purge apt packages.
+
+What this project installs on a target Pi:
+
+- project tree (usually `/home/<user>/SPEECH_RECORD_ANALYSIS`)
+- `venv/` with Python dependencies from [requirements-pi.txt](requirements-pi.txt)
+- offline bundle folders (`wheelhouse/`, `debs/`, `models/`)
+- optional user services: `speech-record-mic1.service`, `speech-record-mic2.service`
+
+Typical observed bundle footprint:
+
+- `wheelhouse/`: about 3.2 to 3.3 GB
+- `models/`: about 1.1 GB
+- `debs/`: about 27 to 28 MB
+- plus `venv/` (often multiple GB, depending on torch dependency closure)
+
+Use [uninstall_from_bundle.sh](uninstall_from_bundle.sh) on the target Pi for in-place cleanup:
+
+```bash
+cd /home/<user>/SPEECH_RECORD_ANALYSIS
+bash uninstall_from_bundle.sh
+```
+
+For full folder removal and optional apt purge, see [docs/uninstall_and_footprint.md](docs/uninstall_and_footprint.md).
 
 ## 6. Manual Modes, Testing, And Troubleshooting
 
@@ -244,5 +305,6 @@ Two authoritative guides own the two workflows. Everything else is a reference l
 | Operator OSC commands + full session YAML      | [docs/operator_osc_control.md](docs/operator_osc_control.md)                     |
 | Per-Pi runtime config internals                | [docs/pi_runtime_processing.md](docs/pi_runtime_processing.md)                   |
 | Laptop-only and one-Pi test recipes            | [docs/quick_test_laptop_one_pi.md](docs/quick_test_laptop_one_pi.md)             |
+| Uninstall and disk footprint                   | [docs/uninstall_and_footprint.md](docs/uninstall_and_footprint.md)               |
 | Script responsibilities and entrypoints        | [docs/script_map.md](docs/script_map.md)                                         |
 | openSMILE column reference                     | [docs/openSmile_information.md](docs/openSmile_information.md)                   |

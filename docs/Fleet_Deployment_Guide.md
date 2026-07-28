@@ -9,7 +9,7 @@ Authoritative end-to-end guide for deploying the Speech Record Analysis system o
 
 | Role            | Hostname    | Reachable at                        | User          | Purpose                                                                                                                             |
 | --------------- | ----------- | ----------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Control machine | your Mac    | any network                         | your Mac user | Runs `rsync`, `deploy_bundle_to_fleet.py`, `configure_auto_start.py`. Holds the master bundle.                                      |
+| Control machine | your Mac    | any network                         | your Mac user | Runs deploy scripts and holds the master bundle.                                                                                    |
 | Builder Pi      | `emotionpi` | `192.168.1.48` (during preparation) | `admin`       | Only Pi with internet. Downloads Python wheels and `.deb` packages so the fleet Pis never need internet. **Not part of the fleet.** |
 | Fleet Pi 1      | `rpi5-11`   | `192.168.0.11`                      | `pi`          | Recording Pi. Two microphones. Offline.                                                                                             |
 | Fleet Pi 2      | `rpi5-12`   | `192.168.0.12`                      | `pi`          | Recording Pi. Two microphones. Offline.                                                                                             |
@@ -32,6 +32,30 @@ flowchart LR
 Do **not** skip Phase 2. Deploying to a single Pi first catches bundle problems (missing wheels, missing `.deb`, arch mismatch, config typos) before you touch the rest of the fleet.
 
 Autostart is a **separate, opt-in phase**. Do not enable it until Phases 2 and 3 pass. Once autostart is on, systemd owns the mic processes and manual `START_AUDIO_PROCESSING.sh` runs will conflict.
+
+## 2.1 Start Here: Explicit Commands
+
+There is no separate operator "setup" phase command. In this project, `setup_pi.sh` is an internal script invoked during Phase 3 (`install_from_bundle.sh`), while operators run only the explicit phase commands below.
+
+One-off Pi (non-fleet, current target):
+
+```bash
+python3 copy_bundle_to_targets.py --user admin --host 192.168.0.22 --dest-dir /home/admin/SPEECH_RECORD_ANALYSIS
+python3 install_bundle_on_targets.py --user admin --host 192.168.0.22 --dest-dir /home/admin/SPEECH_RECORD_ANALYSIS
+python3 check_deployment_status.py --user admin --host 192.168.0.22 --project-dir /home/admin/SPEECH_RECORD_ANALYSIS
+python3 autostart_config_to_targets.py --user admin --host 192.168.0.22 --project-dir /home/admin/SPEECH_RECORD_ANALYSIS
+```
+
+Fleet:
+
+```bash
+python3 copy_bundle_to_targets.py --user pi --devices 1-6
+python3 install_bundle_on_targets.py --user pi --devices 1-6
+python3 check_deployment_status.py --user pi --devices 1-6
+python3 autostart_config_to_targets.py --user pi --devices 1-6
+```
+
+`deploy_lab_defaults.sh` is a convenience wrapper that runs those phases with lab defaults.
 
 ## 3. Phase Summaries And Detail Links
 
@@ -58,12 +82,14 @@ Push the full bundle to just one fleet Pi (typically `rpi5-11` at `192.168.0.11`
 
 Steps in short:
 
-1. `./deploy_bundle_to_fleet.py --user pi --devices 1` — rsync bundle + run `install_from_bundle.sh` on the target Pi.
-2. SSH in and verify:
+1. `python3 copy_bundle_to_targets.py --user pi --devices 1`.
+2. `python3 install_bundle_on_targets.py --user pi --devices 1`.
+3. `python3 check_deployment_status.py --user pi --devices 1`.
+4. SSH in and verify:
    - both microphones are seen (`python strip_monitor.py --list-devices`),
    - the launcher runs (`./START_AUDIO_PROCESSING.sh`),
    - OSC telemetry lands on the Mac (`run_web.sh` on the Mac).
-3. Only when all three pass, proceed to Phase 3.
+5. Only when all three pass, proceed to Phase 3.
 
 If it fails, fix in one place (bundle or config) and re-run — this is the whole point of testing one Pi first.
 
@@ -71,12 +97,15 @@ If it fails, fix in one place (bundle or config) and re-run — this is the whol
 
 Detail: [Fleet_Deployment_via_SSH.md](Fleet_Deployment_via_SSH.md)
 
-Once Phase 2 is green, roll the same bundle to all six Pis in one command.
+Once Phase 2 is green, roll the same bundle to all six Pis with explicit phase commands.
 
-Two equivalent commands:
+1. `python3 copy_bundle_to_targets.py --user pi --devices 1-6`
+2. `python3 install_bundle_on_targets.py --user pi --devices 1-6`
+3. `python3 check_deployment_status.py --user pi --devices 1-6`
 
-- `./deploy_bundle_to_fleet.py --user pi --devices 1-6` — rsync + install on all six.
-- `./deploy_lab_defaults.sh --skip-autostart` — same thing with lab defaults baked in.
+Optional wrapper:
+
+- `./deploy_lab_defaults.sh --skip-autostart` (convenience only)
 
 At the end of Phase 3, every fleet Pi has the code, models, wheelhouse, and debs, and each Pi has `venv/` populated. The mic processes are **not** running yet.
 
@@ -84,7 +113,7 @@ At the end of Phase 3, every fleet Pi has the code, models, wheelhouse, and debs
 
 Detail: [Autostart_Configuration_on_Fleet.md](Autostart_Configuration_on_Fleet.md)
 
-`python3 configure_auto_start.py --user pi` installs two systemd **user** services per Pi (`mic1`, `mic2`). After a reboot each Pi launches both mic processes automatically at boot, indefinitely.
+`python3 autostart_config_to_targets.py --user pi --devices 1-6` installs two systemd **user** services per Pi (`mic1`, `mic2`). After a reboot each Pi launches both mic processes automatically at boot, indefinitely.
 
 Do this only after every fleet Pi passes the Phase 2 checks manually with `./START_AUDIO_PROCESSING.sh`. Once installed, use `systemctl --user start/stop/restart mic1 mic2` — do not run the launcher script manually anymore.
 
@@ -108,8 +137,11 @@ Full script/domain map: [script_map.md](script_map.md). The scripts touched by t
 
 - `prepare_wheelhouse.sh` — build Python wheelhouse on builder Pi.
 - `prepare_debs.sh` — download system `.deb`s on builder Pi.
-- `deploy_bundle_to_fleet.py` — rsync bundle + run remote installer.
-- `deploy_lab_defaults.sh` — one-shot wrapper with lab defaults.
+- `copy_bundle_to_targets.py` — copy bundle to one/fleet targets.
+- `install_bundle_on_targets.py` — run remote `install_from_bundle.sh` on one/fleet targets.
+- `check_deployment_status.py` — read-only per-Pi phase status table.
+- `autostart_config_to_targets.py` — configure autostart services on one/fleet targets.
+- `deploy_lab_defaults.sh` — convenience wrapper that runs phases in sequence.
 - `install_from_bundle.sh` — offline installer that runs on each fleet Pi.
 - `setup_pi.sh` — low-level venv+pip helper (called by `install_from_bundle.sh`).
-- `configure_auto_start.py` — install systemd user services for autostart.
+- `deploy_bundle_to_fleet.py` and `configure_auto_start.py` — lower-level/compatibility scripts.

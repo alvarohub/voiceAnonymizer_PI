@@ -41,6 +41,28 @@ if [ "${#PACKAGES[@]}" -eq 0 ]; then
     exit 1
 fi
 
+resolve_dep_closure() {
+    # Expand hard runtime dependencies recursively.
+    # We intentionally exclude recommends/suggests to keep bundle size bounded.
+    apt-cache depends --recurse \
+        --no-recommends \
+        --no-suggests \
+        --no-conflicts \
+        --no-breaks \
+        --no-replaces \
+        --no-enhances \
+        "$@" \
+        | sed -n -E 's/^[[:space:]]*(Pre)?Depends:[[:space:]]*<?([^> ]+)>?/\2/p'
+}
+
+is_real_package() {
+    local pkg="$1"
+    local candidate installed
+    candidate="$(apt-cache policy "$pkg" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
+    installed="$(apt-cache policy "$pkg" 2>/dev/null | awk '/Installed:/ {print $2; exit}')"
+    [[ "${candidate:-}" != "(none)" || "${installed:-}" != "(none)" ]]
+}
+
 echo "==> Refreshing apt package index (needs sudo)"
 sudo apt-get update
 
@@ -50,12 +72,34 @@ sudo rm -f "$DEBS_DIR"/*.deb
 
 echo "==> Downloading .debs (+ every transitive dependency) into $DEBS_DIR"
 printf '  - %s\n' "${PACKAGES[@]}"
+
+echo "==> Resolving dependency closure"
+mapfile -t RAW_DEPS < <(resolve_dep_closure "${PACKAGES[@]}")
+
+# Include the direct packages explicitly and deduplicate.
+ALL_CANDIDATES=("${PACKAGES[@]}" "${RAW_DEPS[@]}")
+mapfile -t UNIQUE_CANDIDATES < <(printf '%s\n' "${ALL_CANDIDATES[@]}" | awk 'NF' | sort -u)
+
+RESOLVED_PACKAGES=()
+for pkg in "${UNIQUE_CANDIDATES[@]}"; do
+    if is_real_package "$pkg"; then
+        RESOLVED_PACKAGES+=("$pkg")
+    fi
+done
+
+if [ "${#RESOLVED_PACKAGES[@]}" -eq 0 ]; then
+    echo "ERROR: dependency resolution produced an empty package set." >&2
+    exit 1
+fi
+
+echo "==> Download set contains ${#RESOLVED_PACKAGES[@]} packages"
+
 # --reinstall forces apt to fetch even packages already installed on the builder.
 # --download-only prevents any install step on THIS Pi.
 # -o Dir::Cache::archives=... redirects the download cache to our repo-local folder.
 sudo apt-get install -y --reinstall --download-only \
     -o Dir::Cache::archives="$DEBS_DIR" \
-    "${PACKAGES[@]}"
+    "${RESOLVED_PACKAGES[@]}"
 
 # apt writes .debs as root; chown back so rsync/scp as the login user works.
 sudo chown -R "$USER" "$DEBS_DIR"

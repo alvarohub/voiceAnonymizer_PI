@@ -238,9 +238,9 @@ Then log out (`exit`). At this point:
 
 - The Pi is fully deployed but idle (no autostart).
 - The bundle is validated end-to-end.
-- You can safely proceed to [Phase 3 — Fleet Rollout via SSH](Fleet_Deployment_via_SSH.md).
+- If you are building a fleet, you can safely proceed to [Phase 3 — Fleet Rollout via SSH](Fleet_Deployment_via_SSH.md).
 
-Do **not** run `configure_auto_start.py` yet. Autostart is Phase 4, opt-in, only after every Pi passes this same manual test.
+_(Wait until the whole fleet passes manual tests before enabling autostart for the fleet. However, if this is truly a one-off Pi installation and you want it to run on boot immediately, you can proceed directly to Phase 4 now by running: `python3 autostart_config_to_targets.py --user admin --host 192.168.0.22 --project-dir /home/admin/SPEECH_RECORD_ANALYSIS`)_
 
 ## 7. Common Failures And Fixes
 
